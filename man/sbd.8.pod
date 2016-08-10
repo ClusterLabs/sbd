@@ -546,13 +546,13 @@ configure fencing resource. This should be a primitive, not a clone, as
 follows:
 
 	primitive fencing-sbd stonith:external/sbd \
-		op start start-delay="15"
+		params pcmk_delay_max=30s
 
 This will automatically use the same devices as configured in
 F</etc/sysconfig/sbd>.
 
 While you should not configure this as a clone (as Pacemaker will start
-a fencing agent in each partition automatically), the I<start-delay>
+a fencing agent in each partition automatically), the I<pcmk_delay_max>
 setting ensures, in a scenario where a split-brain scenario did occur in
 a two node cluster, that the one that still needs to instantiate a
 fencing agent is slightly disadvantaged to avoid fencing loops.
