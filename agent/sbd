@@ -82,7 +82,7 @@ off|reset)
 status)
     sbd_check_device
     sbd_validate_timeout
-    if ! sbd -d $sbd_device list >/dev/null 2>&1 ; then
+    if ! ps aux|grep "sbd: inquisitor"|grep -v grep; then
     	ha_log.sh err "sbd could not list nodes from $sbd_device"
     	exit 1
     fi

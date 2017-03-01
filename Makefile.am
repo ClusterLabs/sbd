@@ -39,6 +39,7 @@ srpm:	export
 	rpmbuild $(RPM_OPTS) -bs $(PACKAGE).spec
 
 rpm:	export
+	sed -i 's/global\ commit.*/global\ commit\ $(TAG)/' $(PACKAGE).spec
 	rpmbuild $(RPM_OPTS) -ba $(PACKAGE).spec
 
 mock:   srpm
