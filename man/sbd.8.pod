@@ -295,6 +295,13 @@ present yet. This allows to set a timeout for waiting for devices to
 appear on start-up. If set to 0, start-up will be aborted immediately if
 no devices are available.
 
+=item B<-A>
+
+If enabled, sbd will delay on boot for "msgwait" seconds.
+This may be necessary if your cluster nodes reboot so fast that the
+other nodes are still waiting in the fence acknowledgement phase.
+This is an occasional issue with virtual machines.
+
 =item B<-Z>
 
 Enable trace mode. B<Warning: this is unsafe for production, use at your

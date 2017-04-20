@@ -89,6 +89,7 @@ usage(void)
 "			(default is 5, set to 0 to disable)\n"
 "-F <N>		# of failures before a servant is considered faulty (optional)\n"
 "			(default is 1, set to 0 to disable)\n"
+"-A		Enable start delay (wait for msgwait seconds at start) (optional)\n"
 "-P		Check Pacemaker quorum and node health (optional, watch only)\n"
 "-Z		Enable trace mode. WARNING: UNSAFE FOR PRODUCTION!\n"
 "Commands:\n"

@@ -877,9 +877,12 @@ int main(int argc, char **argv, char **envp)
         }
         cl_log(LOG_DEBUG, "Start delay: %d (%s)", (int)start_delay, value?value:"default");
 
-	while ((c = getopt(argc, argv, "czC:DPRTWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:")) != -1) {
+	while ((c = getopt(argc, argv, "czC:DPRTAWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:")) != -1) {
 		switch (c) {
 		case 'D':
+			break;
+		case 'A':
+			start_delay = 1;
 			break;
 		case 'Z':
 			debug_mode++;

@@ -59,15 +59,15 @@ always) SBD_OPTS+=" -S 0" ;;
 clean) SBD_OPTS+=" -S 1" ;;
 esac
 : ${SBD_DELAY_START:="no"}
+if ocf_is_true "$SBD_DELAY_START" ; then
+	SBD_OPTS+=" -A"
+fi
 
 start() {
 	if ! pidofproc -p $SBD_PIDFILE $SBD_BIN >/dev/null 2>&1 ; then
 		if ! $SBD_BIN -d $SBD_DEVICE $SBD_OPTS watch ; then
 			echo "SBD failed to start; aborting."
 			exit 1
-		fi
-		if ocf_is_true ${SBD_DELAY_START} ; then
-			sleep $(sbd -d "$SBD_DEVICE" dump | grep -m 1 msgwait | awk '{print $4}') 2>/dev/null
 		fi
 	else
 		return 0
