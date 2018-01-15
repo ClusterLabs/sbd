@@ -90,6 +90,10 @@ rm -rf %{buildroot}
 %post
 %systemd_post sbd.service
 %systemd_post sbd_remote.service
+if [ $1 -ne 1 ] ; then
+	systemctl is-enabled sbd && systemctl reenable sbd
+	systemctl is-enabled sbd_remote && systemctl reenable sbd_remote
+fi
 
 %preun
 %systemd_preun sbd.service
