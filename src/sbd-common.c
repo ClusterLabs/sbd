@@ -684,12 +684,12 @@ do_exit(char kind)
         cl_log(LOG_NOTICE, "Initiating kdump");
 
     } else if (debug_mode == 1) {
-        cl_log(LOG_WARNING, "Initiating kdump instead of panicing the node (debug mode)");
+        cl_log(LOG_WARNING, "Initiating kdump instead of panicking the node (debug mode)");
         kind = 'c';
     }
 
     if (debug_mode == 2) {
-        cl_log(LOG_WARNING, "Shutting down SBD instead of panicing the node (debug mode)");
+        cl_log(LOG_WARNING, "Shutting down SBD instead of panicking the node (debug mode)");
         watchdog_close(true);
         exit(0);
     }
