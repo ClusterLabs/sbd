@@ -84,11 +84,23 @@ stop() {
         done
 }
 
+status() {
+	if pidofproc -p $SBD_PIDFILE $SBD_BIN >/dev/null 2>&1 ; then
+		echo "SBD is running."
+		return 0
+	else
+		echo "SBD is not running."
+		return 1
+	fi
+}
+
 case "$1" in
-start|stop)
+start|stop|status)
 	$1 ;;
+restart|force-reload)
+	stop; start ;;
 *)
-	echo "Usage: $0 (start|stop)"
+	echo "Usage: $0 (start|stop|status|restart|force-reload)"
 	exit 1
 	;;
 esac
