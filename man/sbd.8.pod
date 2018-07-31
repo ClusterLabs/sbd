@@ -4,7 +4,7 @@ sbd - STONITH Block Device daemon
 
 =head1 SYNOPSIS
 
-sbd <-d F</dev/...>> [I<options>] I<command> [I<parameters>...]
+B<sbd> B<-d> F</dev/...> [I<options>] I<command> [I<parameters>...]
 
 =head1 DESCRIPTION
 
