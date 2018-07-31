@@ -54,13 +54,17 @@ environment, you should instead always refer to them by using the long,
 stable device name (e.g.,
 F</dev/disk/by-id/dm-uuid-part1-mpath-3600508b400105b5a0001500000250000>).
 
-=item B<-v>
-
-Enable some verbose debug logging.
-
 =item B<-h>
 
 Display a concise summary of C<sbd> options.
+
+=item B<-I> I<N>
+
+Async IO timeout (defaults to 3 seconds, optional). You should not need
+to adjust this unless your IO setup is really very slow.
+
+(In daemon mode, the watchdog is refreshed when the majority of devices
+could be read within this time.)
 
 =item B<-n> I<node>
 
@@ -74,13 +78,9 @@ priority, locks itself into memory, and also acquires highest IO
 priority to protect itself against interference from other processes on
 the system. This is a debugging-only option.
 
-=item B<-I> I<N>
+=item B<-v>
 
-Async IO timeout (defaults to 3 seconds, optional). You should not need
-to adjust this unless your IO setup is really very slow.
-
-(In daemon mode, the watchdog is refreshed when the majority of devices
-could be read within this time.)
+Enable some verbose debug logging.
 
 =back
 
@@ -229,22 +229,25 @@ that handles the Pacemaker integration.
 
 =over
 
-=item B<-W>
+=item B<-5> I<N>
 
-Enable or disable use of the system watchdog to protect against the sbd
-processes failing and the node being left in an undefined state. Specify
-this once to enable, twice to disable.
+Warn if the time interval for tickling the watchdog exceeds this many seconds.
+Since the node is unable to log the watchdog expiry (it reboots immediately
+without a chance to write its logs to disk), this is very useful for getting
+an indication that the watchdog timeout is too short for the IO load of the
+system.
 
-Defaults to I<enabled>.
+Default is 3 seconds, set to zero to disable.
 
-=item B<-w> F</dev/watchdog>
+=item B<-C> I<N>
 
-This can be used to override the default watchdog device used and should not
-usually be necessary.
+Watchdog timeout to set before crashdumping. If SBD is set to crashdump
+instead of reboot - either via the trace mode settings or the I<external/sbd>
+fencing agent's parameter -, SBD will adjust the watchdog timeout to this
+setting before triggering the dump. Otherwise, the watchdog might trigger and
+prevent a successful crashdump from ever being written.
 
-=item B<-p> F</var/run/sbd.pid>
-
-This option can be used to specify a pidfile for the main sbd process.
+Defaults to 240 seconds. Set to zero to disable.
 
 =item B<-F> I<N>
 
@@ -257,20 +260,16 @@ period and then delay.
 
 Defaults to I<1>.
 
-=item B<-t> I<N>
-
-Dampening delay before faulty servants are restarted. Combined with C<-F 1>,
-the most logical way to tune the restart frequency of servant processes.
-Default is 5 seconds.
-
-If set to zero, processes will be restarted indefinitely and immediately.
-
 =item B<-P>
 
 Enable Pacemaker integration which checks Pacemaker quorum and node health.
 Specify this once to enable, twice to disable.
 
 Defaults to I<enabled>.
+
+=item B<-p> F</var/run/sbd.pid>
+
+This option can be used to specify a pidfile for the main sbd process.
 
 =item B<-S> I<N>
 
@@ -298,13 +297,6 @@ present yet. This allows to set a timeout for waiting for devices to
 appear on start-up. If set to 0, start-up will be aborted immediately if
 no devices are available.
 
-=item B<-Z>
-
-Enable trace mode. B<Warning: this is unsafe for production, use at your
-own risk!> Specifying this once will turn all reboots or power-offs, be
-they caused by self-fence decisions or messages, into a crashdump.
-Specifying this twice will just log them but not continue running.
-
 =item B<-T>
 
 By default, the daemon will set the watchdog timeout as specified in the
@@ -313,25 +305,33 @@ In this case, you must manually ensure that the watchdog timeout used by
 the system correctly matches the SBD settings, and then specify this
 option to allow C<sbd> to continue with start-up.
 
-=item B<-5> I<N>
+=item B<-t> I<N>
 
-Warn if the time interval for tickling the watchdog exceeds this many seconds.
-Since the node is unable to log the watchdog expiry (it reboots immediately
-without a chance to write its logs to disk), this is very useful for getting
-an indication that the watchdog timeout is too short for the IO load of the
-system.
+Dampening delay before faulty servants are restarted. Combined with C<-F 1>,
+the most logical way to tune the restart frequency of servant processes.
+Default is 5 seconds.
 
-Default is 3 seconds, set to zero to disable.
+If set to zero, processes will be restarted indefinitely and immediately.
 
-=item B<-C> I<N>
+=item B<-W>
 
-Watchdog timeout to set before crashdumping. If SBD is set to crashdump
-instead of reboot - either via the trace mode settings or the I<external/sbd>
-fencing agent's parameter -, SBD will adjust the watchdog timeout to this
-setting before triggering the dump. Otherwise, the watchdog might trigger and
-prevent a successful crashdump from ever being written.
+Enable or disable use of the system watchdog to protect against the sbd
+processes failing and the node being left in an undefined state. Specify
+this once to enable, twice to disable.
 
-Defaults to 240 seconds. Set to zero to disable.
+Defaults to I<enabled>.
+
+=item B<-w> F</dev/watchdog>
+
+This can be used to override the default watchdog device used and should not
+usually be necessary.
+
+=item B<-Z>
+
+Enable trace mode. B<Warning: this is unsafe for production, use at your
+own risk!> Specifying this once will turn all reboots or power-offs, be
+they caused by self-fence decisions or messages, into a crashdump.
+Specifying this twice will just log them but not continue running.
 
 =back
 
