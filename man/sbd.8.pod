@@ -99,7 +99,9 @@ The default is no verbosity.
 
 =back
 
-=head2 create
+=head2 Commands
+
+=head3 Command "create"
 
 Example usage:
 
@@ -163,7 +165,7 @@ The default value is 10 for most platforms, and 30 for S390.
 
 =back
 
-=head2 list
+=head3 Command "list"
 
 Example usage:
 
@@ -178,7 +180,7 @@ that are currently running should have a I<clear> state; nodes that have
 been fenced, but not yet restarted, will show the appropriate fencing
 message.
 
-=head2 dump
+=head3 Command "dump"
 
 Example usage:
 
@@ -195,7 +197,7 @@ Example usage:
 
 Dump meta-data header from device.
 
-=head2 watch
+=head3 Command "watch"
 
 Example usage:
 
@@ -391,7 +393,7 @@ It seems the node may still be reset! See do_exit()
 
 =back
 
-=head2 allocate
+=head3 Command "allocate"
 
 Example usage:
 
@@ -401,7 +403,7 @@ Explicitly allocates a slot for the specified node name. This should
 rarely be necessary, as every node will automatically allocate itself a
 slot the first time it starts up on watch mode.
 
-=head2 message
+=head3 Command "message"
 
 Example usage:
 
@@ -450,7 +452,7 @@ a fencing message by the cluster.
 
 =back
 
-=head2 query-watchdog
+=head3 Command "query-watchdog"
 
 Example usage:
 
@@ -462,7 +464,7 @@ B<Warning>: This command will arm the watchdog during query, and if your
 watchdog refuses disarming (for example, if its kernel module has the
 'nowayout' parameter set) this will reset your system.
 
-=head2 test-watchdog
+=head3 Command "test-watchdog"
 
 Example usage:
 
@@ -474,9 +476,9 @@ B<Warning>: This command will arm the watchdog and have your system reset
 in case your watchdog is working properly! If issued from an interactive
 session, it will prompt for confirmation.
 
-=head1 Base system configuration
+=head2 Base System Configuration
 
-=head2 Configure a watchdog
+=head3 Configure a watchdog
 
 It is highly recommended that you configure your Linux system to load a
 watchdog driver with hardware assistance (as is available on most modern
@@ -489,7 +491,7 @@ systems management software that use the watchdog for system resets
 (f.e. HP ASR daemon). Such software has to be disabled if the watchdog
 is to be used by SBD.
 
-=head2 Choosing and initializing the block device(s)
+=head3 Choosing and initializing the block device(s)
 
 First, you have to decide if you want to use one, two, or three devices.
 
@@ -571,7 +573,7 @@ After you have chosen the devices and created the appropriate partitions
 and perhaps multipath alias names to ease management, use the C<sbd create>
 command described above to initialize the SBD metadata on them.
 
-=head3 Sharing the block device(s) between multiple clusters
+=head4 Sharing the block device(s) between multiple clusters
 
 It is possible to share the block devices between multiple clusters,
 provided the total number of nodes accessing them does not exceed I<255>
@@ -626,9 +628,9 @@ is ready to receive messages.
 Make B<sure> that F</etc/sysconfig/sbd> is identical on all cluster
 nodes, and that all cluster nodes are running the daemon.
 
-=head1 Pacemaker CIB integration
+=head2 Pacemaker CIB integration
 
-=head2 Fencing resource
+=head3 Fencing resource
 
 Pacemaker can only interact with SBD to issue a node fence if there is a
 configure fencing resource. This should be a primitive, not a clone, as
@@ -653,7 +655,7 @@ enable this via the C<crashdump="true"> parameter on the fencing
 resource. This is B<not> recommended for production use, but only for
 debugging phases.
 
-=head2 General cluster properties
+=head3 General Cluster Properties
 
 You must also enable STONITH in general, and set the STONITH timeout to
 be at least twice the I<msgwait> timeout you have configured, to allow
@@ -672,9 +674,9 @@ automatically extend the I<stonith-timeout> setting to a reasonable
 value, on the assumption that sbd modifying your configuration is
 preferable to not fencing.
 
-=head1 Management tasks
+=head2 Management tasks
 
-=head2 Recovering from temporary SBD device outage
+=head3 Recovering from temporary SBD Device Outage
 
 If you have multiple devices, failure of a single device is not immediately
 fatal. C<sbd> will retry to restart the monitor for the device every 5
