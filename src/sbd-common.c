@@ -78,6 +78,8 @@ usage(void)
 "-5 <N>		Warn if loop latency exceeds threshold (optional, watch only)\n"
 "			(default is 3, set to 0 to disable)\n"
 "-C <N>		Watchdog timeout to set before crashdumping (def: 240s, optional)\n"
+"-c		Check cluster\n"
+"-D		Has no effect\n"
 "-d <devname>	Block device to use (mandatory; can be specified up to 3 times)\n"
 "-F <N>		# of failures before a servant is considered faulty (optional)\n"
 "			(default is 1, set to 0 to disable)\n"
