@@ -4,9 +4,9 @@ sbd - STONITH Block Device daemon
 
 =head1 SYNOPSIS
 
-sbd <-d F</dev/...>> [options] C<command>
+sbd <-d F</dev/...>> [I<options>] I<command> [I<parameters>...]
 
-=head1 SUMMARY
+=head1 DESCRIPTION
 
 SBD provides a node fencing mechanism (Shoot the other node in the head,
 STONITH) for Pacemaker-based clusters through the exchange of messages
@@ -22,21 +22,24 @@ any monitored daemon is lost and not recovered or if Pacemaker decides
 that the node requires fencing.
 
 The F<sbd> binary implements both the daemon that watches the message
-slots as well as the management tool for interacting with the block
+slots, as well as the management tool for interacting with the block
 storage device(s). This mode of operation is specified via the
-C<command> parameter; some of these modes take additional parameters.
+I<command> parameter; some of these modes take additional parameters.
 
-To use SBD with shared storage, you must first C<create> the messaging
-layout on one to three block devices. Second, configure
+To use SBD with shared storage, you must first I<create> the messaging
+layout on each block device.
+Second (assuming the cluster stack is down), configure
 F</etc/sysconfig/sbd> to list those devices (and possibly adjust other
-options), and restart the cluster stack on each node to ensure that
-C<sbd> is started. Third, configure the C<external/sbd> fencing
-resource in the Pacemaker CIB.
+options), then starting the cluster stack on each node, so that
+C<sbd> is started.
+Third, configure the C<external/sbd> fencing resource in the Pacemaker CIB.
 
-Each of these steps is documented in more detail below the description
-of the command options.
+Each of these steps is documented in more detail when describing the commands
+and their options.
 
 C<sbd> can only be used as root.
+
+=head1 OPTIONS
 
 =head2 GENERAL OPTIONS
 
@@ -65,27 +68,34 @@ Display a concise summary of C<sbd> options.
 
 =item B<-I> I<N>
 
-Async IO timeout (defaults to 3 seconds, optional). You should not need
-to adjust this unless your IO setup is really very slow.
+Set the Async IO timeout to I<N>.
+This is the time within each single read or write operation to the disk device must have finished.
+You should not need to adjust this unless your IO setup is really very slow.
+The default value is 3.
 
 (In daemon mode, the watchdog is refreshed when the majority of devices
-could be read within this time.)
+could be read within this time.  That means "(loop timeout plus io timeout)
+times the number of required devices" must not exceed the watchdog timeout.)
 
 =item B<-n> I<node>
 
-Set local node name; defaults to C<uname -n>. This should not need to be
-set.
+Use I<node> to identify the local node.
+This should not need to be set.
+The default value is the name C<uname -n> would report.
 
 =item B<-R>
 
-Do B<not> enable realtime priority. By default, C<sbd> runs at realtime
-priority, locks itself into memory, and also acquires highest IO
-priority to protect itself against interference from other processes on
-the system. This is a debugging-only option.
+Do B<not> enable realtime priority.
+This is a debugging option.
+The default is disabled, using Round-Robin scheduling (C<SCHED_RR>) with the
+highest possible priority, and locking its memory via C<mlockall(2)>.
 
 =item B<-v>
 
-Enable some verbose debug logging.
+Increase logging.
+This option can be used up to three times to increase verbosity of messages
+being output.
+The default is no verbosity.
 
 =back
 
@@ -119,15 +129,27 @@ If your sbd device(s) reside on a multipath setup or iSCSI, this should
 be the time required to detect a path failure. You may be able to reduce
 this if your device outages are independent, or if you are using the
 Pacemaker integration.
+The default value is 5 for most platforms, 15 for S390.
 
 =item B<-2> I<N>
 
 Set slot allocation timeout to N seconds. You should not need to tune
 this.
+Actually this is not a timeout value, but the delay between retrying to
+allocate a slot for a host.
+The default value is 2.
 
 =item B<-3> I<N>
 
 Set daemon loop timeout to N seconds. You should not need to tune this.
+Actually this is not a timeout value, but the delay between each round of
+trying to read the disks.
+In addition it is the delay being used as delay between attempts to connect
+to the CIB.
+The default value is 1.
+
+=for comment
+This option should be explained in greater detail!
 
 =item B<-4> I<N>
 
@@ -137,6 +159,7 @@ will be considered delivered. (Or long enough for the node to detect
 that it needed to self-fence.)
 
 This also affects the I<stonith-timeout> in Pacemaker's CIB; see below.
+The default value is 10 for most platforms, and 30 for S390.
 
 =back
 
@@ -186,7 +209,7 @@ C<sbd> B<must> be started on boot before the cluster stack! See below
 for enabling this according to your boot environment.
 
 The options for this mode are rarely specified directly on the
-commandline directly, but most frequently set via F</etc/sysconfig/sbd>.
+command line directly, but most frequently set via F</etc/sysconfig/sbd>.
 
 It also constantly monitors connectivity to the storage device, and
 self-fences in case the partition becomes unreachable, guaranteeing that it
@@ -237,12 +260,15 @@ that handles the Pacemaker integration.
 =item B<-5> I<N>
 
 Warn if the time interval for tickling the watchdog exceeds this many seconds.
+That interval will be at least the loop timeout.
 Since the node is unable to log the watchdog expiry (it reboots immediately
 without a chance to write its logs to disk), this is very useful for getting
 an indication that the watchdog timeout is too short for the IO load of the
 system.
 
 Default is 3 seconds, set to zero to disable.
+If the watchdog timeout is set to a value exceeding 5, that value times 3/5
+is being used.
 
 =item B<-C> I<N>
 
@@ -252,61 +278,74 @@ fencing agent's parameter -, SBD will adjust the watchdog timeout to this
 setting before triggering the dump. Otherwise, the watchdog might trigger and
 prevent a successful crashdump from ever being written.
 
+The value set seems to be unused.
+
 Defaults to 240 seconds. Set to zero to disable.
 
 =item B<-c>
 
 Force a cluster check.
+If enabled, additional cluster checks are done periodically.
+
+=for comment
+The description should be improved by someone who knows how it really works.
+
 Usually cluster checks are enabled automatically.
 
 =item B<-F> I<N>
 
-Number of failures before a failing servant process will not be restarted
-immediately until the dampening delay has expired. If set to zero, servants
-will be restarted immediately and indefinitely. If set to one, a failed
-servant will be restarted once every B<-t> seconds. If set to a different
-value, the servant will be restarted that many times within the dampening
-period and then delay.
-
+Number of times a failing servant process will be restarted within the servant
+restart interval.
+If set to zero, servants will be restarted immediately and indefinitely.
+If set to one, a failed servant will be restarted once every servant restart
+interval.
+See also option C<-t>.
 Defaults to I<1>.
 
 =item B<-P>
 
 Enable Pacemaker integration which checks Pacemaker quorum and node health.
-Specify this once to enable, twice to disable.
+Specify this an odd number of times to enable, an even number of times to
+disable.
 
-Defaults to I<enabled>.
+The default is enabled.
 
-=item B<-p> F</var/run/sbd.pid>
+=item B<-p> I<pid_file>
 
-This option can be used to specify a pidfile for the main sbd process.
+Set the file to use as PID file to I<pid_file>.
+There is no default value, meaning a PID file will not be written.
+
+=for comment
+Somebody should explain the advantages/disadvantages of having a PID file.
 
 =item B<-S> I<N>
 
-Set the start mode. (Defaults to I<0>.)
+Set the start mode.
 
-If this is set to zero, sbd will always start up unconditionally,
+If this is set to I<zero>, B<sbd> will always start up unconditionally,
 regardless of whether the node was previously fenced or not.
 
-If set to one, sbd will only start if the node was previously shutdown
+If set to I<one>, B<sbd> will only start if the node was previously shutdown
 cleanly (as indicated by an exit request message in the slot), or if the
-slot is empty. A reset, crashdump, or power-off request in any slot will
+slot is empty.  A reset, crashdump, or power-off request in any slot will
 halt the start up.
 
 This is useful to prevent nodes from rejoining if they were faulty. The
-node must be manually "unfenced" by sending an empty message to it:
+node must be manually "unfenced" (cleared) by sending an empty message to it:
 
 	sbd -d /dev/sda1 message node1 clear
 
+The default value is I<0>.
+
 =item B<-s> I<N>
 
-Set the start-up wait time for devices. (Defaults to I<120>.)
-
-Dynamic block devices such as iSCSI might not be fully initialized and
-present yet. This allows to set a timeout for waiting for devices to
-appear on start-up. If set to 0, start-up will be aborted immediately if
-no devices are available.
-
+Set the start-up wait time for devices to I<N>.
+When starting, B<sbd> will wait up to I<N> seconds to read the header of the
+first disk device.
+If set to 0, start-up will be aborted immediately if no devices are available.
+Dynamic block devices such as iSCSI might take some time to become connected
+and thus operational.
+The default value is 120.
 =item B<-T>
 
 By default, the daemon will set the watchdog timeout as specified in the
@@ -317,31 +356,38 @@ option to allow C<sbd> to continue with start-up.
 
 =item B<-t> I<N>
 
-Dampening delay before faulty servants are restarted. Combined with C<-F 1>,
-the most logical way to tune the restart frequency of servant processes.
+Set the servant restart interval to I<N>.
+That interval is the time in which faulty servants are restarted.
+See also option C<-F 1>,
 Default is 5 seconds.
 
 If set to zero, processes will be restarted indefinitely and immediately.
 
 =item B<-W>
 
-Enable or disable use of the system watchdog to protect against the sbd
-processes failing and the node being left in an undefined state. Specify
-this once to enable, twice to disable.
+Enable or disable use of the system watchdog.
+Use an odd number of times to enable, or an even number of times to disable.
+The default is enabled.
 
-Defaults to I<enabled>.
+=item B<-w> I<watchdog_device>
 
-=item B<-w> F</dev/watchdog>
-
-This can be used to override the default watchdog device used and should not
-usually be necessary.
+Specify the watchdog device to use.
+If set to F</dev/null>, then no watchdog is being used.
+The default value is F</dev/watchdog>.
 
 =item B<-Z>
 
-Enable trace mode. B<Warning: this is unsafe for production, use at your
-own risk!> Specifying this once will turn all reboots or power-offs, be
-they caused by self-fence decisions or messages, into a crashdump.
-Specifying this twice will just log them but not continue running.
+Enable I<debug mode>.
+Using debug mode is unsafe for production, use at your own risk!
+Using I<once> will turn all reboots or power-offs, be they caused by
+self-fence decisions or messages, into a crashdump.
+Specifying this I<twice> will just log them but not continue running.
+Specifying this I<three times> will call C<sync()> and add a ten second delay
+before the actual fencing operation takes place.
+The default value is off.
+
+=for comment
+It seems the node may still be reset! See do_exit()
 
 =back
 
@@ -643,6 +689,8 @@ I<inquisitor> process.
 =head1 LICENSE
 
 Copyright (C) 2008-2013 Lars Marowsky-Bree
+
+Copyright (C) 2018 Ulrich Windl
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public
