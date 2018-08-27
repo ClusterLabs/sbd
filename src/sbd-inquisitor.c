@@ -16,7 +16,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <pacemaker/crm/common/util.h>
+#include <crm/crm.h>
+#include <crm/common/util.h>
 #include "sbd.h"
 #define	LOCKSTRLEN	11
 
