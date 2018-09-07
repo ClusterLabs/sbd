@@ -67,7 +67,11 @@ start() {
 			exit 1
 		fi
 		if ocf_is_true ${SBD_DELAY_START} ; then
-			sleep $($SBD_BIN $SBD_DEVICE_ARGS dump | grep -m 1 msgwait | awk '{print $4}') 2>/dev/null
+			# To be safe the wait should actually be
+			# TOKEN  + pcmk_delay_max + wiggle time + msgwait 
+			# to be 100% sure to not overtake the fence during reboot
+			# but for simplicity 2* might be enough
+                        sleep $(2*($SBD_BIN -d $SBD_DEVICE dump | grep -m 1 msgwait | awk '{print $4}')) 2>/dev/null
 		fi
 	else
 		return 0
