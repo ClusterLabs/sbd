@@ -4,11 +4,11 @@ sbd - STONITH Block Device daemon
 
 =head1 SYNOPSIS
 
-sbd <-d F</dev/...>> [options] C<command>
+B<sbd> B<-d> F</dev/...> [I<options>] I<command> [I<parameters>...]
 
-=head1 SUMMARY
+=head1 DESCRIPTION
 
-SBD provides a node fencing mechanism (Shoot the other node in the head,
+B<SBD> provides a node fencing mechanism (Shoot the other node in the head,
 STONITH) for Pacemaker-based clusters through the exchange of messages
 via shared block storage such as for example a SAN, iSCSI, FCoE. This
 isolates the fencing mechanism from changes in firmware version or
@@ -16,37 +16,45 @@ dependencies on specific firmware controllers, and it can be used as a
 STONITH mechanism in all configurations that have reliable shared
 storage.
 
-SBD can also be used without any shared storage. In this mode, the
+B<SBD> can also be used without any shared storage. In this mode, the
 watchdog device will be used to reset the node if it loses quorum, if
 any monitored daemon is lost and not recovered or if Pacemaker decides
 that the node requires fencing.
 
 The F<sbd> binary implements both the daemon that watches the message
-slots as well as the management tool for interacting with the block
+slots, as well as the management tool for interacting with the block
 storage device(s). This mode of operation is specified via the
-C<command> parameter; some of these modes take additional parameters.
+I<command> parameter; some of these modes take additional parameters.
 
-To use SBD with shared storage, you must first C<create> the messaging
-layout on one to three block devices. Second, configure
+To use B<SBD> with shared storage, you must first I<create> the messaging
+layout on each block device.
+Second (assuming the cluster stack is down), configure
 F</etc/sysconfig/sbd> to list those devices (and possibly adjust other
-options), and restart the cluster stack on each node to ensure that
-C<sbd> is started. Third, configure the C<external/sbd> fencing
-resource in the Pacemaker CIB.
+options), then starting the cluster stack on each node, so that
+B<SBD> is started.
+Third, configure the C<external/sbd> fencing resource in the Pacemaker CIB.
 
-Each of these steps is documented in more detail below the description
-of the command options.
+Each of these steps is documented in more detail when describing the commands
+and their options.
 
-C<sbd> can only be used as root.
+B<SBD> can only be used as root.
 
-=head2 GENERAL OPTIONS
+=head1 OPTIONS
+
+=head2 General Options
 
 =over
+
+=item B<-D>
+
+This option does not have any effect.
+Maybe it's there for compatibility with older versions.
 
 =item B<-d> F</dev/...>
 
 Specify the block device(s) to be used. If you have more than one,
 specify this option up to three times. This parameter is mandatory for
-all modes, since SBD always needs a block device to interact with.
+all modes, since B<SBD> always needs a block device to interact with.
 
 This man page uses F</dev/sda1>, F</dev/sdb1>, and F</dev/sdc1> as
 example device names for brevity. However, in your production
@@ -54,53 +62,61 @@ environment, you should instead always refer to them by using the long,
 stable device name (e.g.,
 F</dev/disk/by-id/dm-uuid-part1-mpath-3600508b400105b5a0001500000250000>).
 
-=item B<-v>
-
-Enable some verbose debug logging.
-
 =item B<-h>
 
-Display a concise summary of C<sbd> options.
-
-=item B<-n> I<node>
-
-Set local node name; defaults to C<uname -n>. This should not need to be
-set.
-
-=item B<-R>
-
-Do B<not> enable realtime priority. By default, C<sbd> runs at realtime
-priority, locks itself into memory, and also acquires highest IO
-priority to protect itself against interference from other processes on
-the system. This is a debugging-only option.
+Display a concise summary of B<sbd> options.
 
 =item B<-I> I<N>
 
-Async IO timeout (defaults to 3 seconds, optional). You should not need
-to adjust this unless your IO setup is really very slow.
+Set the Async IO timeout to I<N>.
+This is the time within each single read or write operation to the disk device must have finished.
+You should not need to adjust this unless your IO setup is really very slow.
+The default value is 3.
 
 (In daemon mode, the watchdog is refreshed when the majority of devices
-could be read within this time.)
+could be read within this time.  That means "(loop timeout plus io timeout)
+times the number of required devices" must not exceed the watchdog timeout.)
+
+=item B<-n> I<node>
+
+Use I<node> to identify the local node.
+This should not need to be set.
+The default value is the name C<uname -n> would report.
+
+=item B<-R>
+
+Do B<not> enable realtime priority.
+This is a debugging option.
+The default is disabled, using Round-Robin scheduling (C<SCHED_RR>) with the
+highest possible priority, and locking its memory via C<mlockall(2)>.
+
+=item B<-v>
+
+Increase logging.
+This option can be used up to three times to increase verbosity of messages
+being output.
+The default is no verbosity.
 
 =back
 
-=head2 create
+=head2 Commands
 
-Example usage:
+=head3 Command "create"
 
-	sbd -d /dev/sdc2 -d /dev/sdd3 create
+B<sbd> B<-d>I<device>... B<create>
 
-If you specify the I<create> command, sbd will write a metadata header
-to the device(s) specified and also initialize the messaging slots for
-up to 255 nodes.
+This is the command to initialize each specified device with a metadata header
+and messaging slots for 255 nodes.
 
 B<Warning>: This command will not prompt for confirmation. Roughly the
 first megabyte of the specified block device(s) will be overwritten
 immediately and without backup.
 
-This command accepts a few options to adjust the default timings that
-are written to the metadata (to ensure they are identical across all
-nodes accessing the device).
+This command uses additional options to adjust the default timings that
+are written to the metadata header, where they are read on each node running
+F<SBD>.
+To ensure that identical parameters are used on each node, make sure that each
+SBD device is initialized with the same timing parameters.
 
 =over
 
@@ -114,15 +130,27 @@ If your sbd device(s) reside on a multipath setup or iSCSI, this should
 be the time required to detect a path failure. You may be able to reduce
 this if your device outages are independent, or if you are using the
 Pacemaker integration.
+The default value is 5 for most platforms, 15 for S390.
 
 =item B<-2> I<N>
 
 Set slot allocation timeout to N seconds. You should not need to tune
 this.
+Actually this is not a timeout value, but the delay between retrying to
+allocate a slot for a host.
+The default value is 2.
 
 =item B<-3> I<N>
 
 Set daemon loop timeout to N seconds. You should not need to tune this.
+Actually this is not a timeout value, but the delay between each round of
+trying to read the disks.
+In addition it is the delay being used as delay between attempts to connect
+to the CIB.
+The default value is 1.
+
+=for comment
+This option should be explained in greater detail!
 
 =item B<-4> I<N>
 
@@ -132,31 +160,47 @@ will be considered delivered. (Or long enough for the node to detect
 that it needed to self-fence.)
 
 This also affects the I<stonith-timeout> in Pacemaker's CIB; see below.
+The default value is 10 for most platforms, and 30 for S390.
 
 =back
 
-=head2 list
+Example:
 
-Example usage:
+	sbd -d /dev/sda1 -d /dev/sdb1 create
+
+=head3 Command "list"
+
+B<sbd> B<-d>I<device>... B<list>
+
+List all allocated slots with their corresponding message (and possibly
+sender) on each device.
+You should see a slot for every cluster node that ever has been started with
+the corresponding device.
+Nodes that are currently running should have a C<clear> state; nodes that have
+been fenced, but not yet restarted, will show the appropriate fencing
+message (e.g. C<reset>).
+See also L</Command "message"> for details.
+
+Example:
 
 	# sbd -d /dev/sda1 list
 	0	hex-0	clear
 	1	hex-7	clear
 	2	hex-9	clear
 
-List all allocated slots on device, and messages. You should see all
-cluster nodes that have ever been started against this device. Nodes
-that are currently running should have a I<clear> state; nodes that have
-been fenced, but not yet restarted, will show the appropriate fencing
-message.
 
-=head2 dump
+=head3 Command "dump"
 
-Example usage:
+B<sbd> B<-d>I<device>... B<dump>
+
+Dump meta-data header of each specified device.
+
+Example:
 
 	# sbd -d /dev/sda1 dump
 	==Dumping header on disk /dev/sda1
-	Header version     : 2
+	Header version     : 2.1
+	UUID               : c345a982-627b-4cb0-b340-86ddd046950d
 	Number of slots    : 255
 	Sector size        : 512
 	Timeout (watchdog) : 15
@@ -165,40 +209,36 @@ Example usage:
 	Timeout (msgwait)  : 30
 	==Header on disk /dev/sda1 is dumped
 
-Dump meta-data header from device.
+=head3 Command "watch"
 
-=head2 watch
+B<sbd> B<-d>I<device>... B<watch>
 
-Example usage:
+This command will make B<sbd> start in I<daemon mode>.
+It will constantly monitor the message slot assigned to the local node,
+checking incoming messages, reachability, and optionally Pacemaker's state.
 
-	sbd -d /dev/sdc2 -d /dev/sdd3 -P watch
+A node slot is automatically allocated on the specified devices the first time
+the daemon starts watching the particular device.
+Hence, manual pre-allocation of slots is not required.
 
-This command will make C<sbd> start in daemon mode. It will constantly monitor
-the message slot of the local node for incoming messages, reachability, and
-optionally take Pacemaker's state into account.
-
-C<sbd> B<must> be started on boot before the cluster stack! See below
-for enabling this according to your boot environment.
-
-The options for this mode are rarely specified directly on the
-commandline directly, but most frequently set via F</etc/sysconfig/sbd>.
-
-It also constantly monitors connectivity to the storage device, and
-self-fences in case the partition becomes unreachable, guaranteeing that it
+Monitoring connectivity to the specified  devices, B<SBD> guarantees that it
 does not disconnect from fencing messages.
+In case of disconnection B<SBD> self-fences.
 
-A node slot is automatically allocated on the device(s) the first time
-the daemon starts watching the device; hence, manual allocation is not
-usually required.
-
-If a watchdog is used together with the C<sbd> as is strongly
-recommended, the watchdog is activated at initial start of the sbd
+If a watchdog is used together with the B<sbd> as is strongly
+recommended, the watchdog is activated at initial start of the B<sbd>
 daemon. The watchdog is refreshed every time the majority of SBD devices
 has been successfully read. Using a watchdog provides additional
-protection against C<sbd> crashing.
+protection against B<sbd> hanging or crashing.
 
-If the Pacemaker integration is activated, C<sbd> will B<not> self-fence
-if device majority is lost, if:
+B<SBD> B<must> be started before the cluster stack!
+See below for enabling this according to your boot environment.
+
+The options for this mode are rarely specified directly on the
+command line directly, but most frequently set via F</etc/sysconfig/sbd>.
+
+If the I<Pacemaker integration> is activated, B<sbd> will B<not> self-fence
+if device majority is lost, and one of the following is true:
 
 =over
 
@@ -216,211 +256,274 @@ the node itself is considered online and healthy by Pacemaker.
 
 =back
 
-This allows C<sbd> to survive temporary outages of the majority of
-devices. However, while the cluster is in such a degraded state, it can
+This allows B<sbd> to survive temporary outages of the majority of
+devices.
+However, while the cluster is in such a degraded state, it can
 neither successfully fence nor be shutdown cleanly (as taking the
 cluster below the quorum threshold will immediately cause all remaining
-nodes to self-fence). In short, it will not tolerate any further faults.
+nodes to self-fence).
+In short, it will not tolerate any further faults.
 Please repair the system before continuing.
 
-There is one C<sbd> process that acts as a master to which all watchers
+=for comment
+If SBD devices are disconnected, does that mean "the cluster is in a degraded
+state"?
+Why shouldn't the cluster be able to be shutdown cleanly?
+Be more specific what in the system to "repair"!
+
+There is one B<sbd> process that acts as a master to which all watchers
 report; one per device to monitor the node's slot; and, optionally, one
 that handles the Pacemaker integration.
+Such watchers are named I<servants>.
 
 =over
-
-=item B<-W>
-
-Enable or disable use of the system watchdog to protect against the sbd
-processes failing and the node being left in an undefined state. Specify
-this once to enable, twice to disable.
-
-Defaults to I<enabled>.
-
-=item B<-w> F</dev/watchdog>
-
-This can be used to override the default watchdog device used and should not
-usually be necessary.
-
-=item B<-p> F</var/run/sbd.pid>
-
-This option can be used to specify a pidfile for the main sbd process.
-
-=item B<-F> I<N>
-
-Number of failures before a failing servant process will not be restarted
-immediately until the dampening delay has expired. If set to zero, servants
-will be restarted immediately and indefinitely. If set to one, a failed
-servant will be restarted once every B<-t> seconds. If set to a different
-value, the servant will be restarted that many times within the dampening
-period and then delay.
-
-Defaults to I<1>.
-
-=item B<-t> I<N>
-
-Dampening delay before faulty servants are restarted. Combined with C<-F 1>,
-the most logical way to tune the restart frequency of servant processes.
-Default is 5 seconds.
-
-If set to zero, processes will be restarted indefinitely and immediately.
-
-=item B<-P>
-
-Enable Pacemaker integration which checks Pacemaker quorum and node health.
-Specify this once to enable, twice to disable.
-
-Defaults to I<enabled>.
-
-=item B<-S> I<N>
-
-Set the start mode. (Defaults to I<0>.)
-
-If this is set to zero, sbd will always start up unconditionally,
-regardless of whether the node was previously fenced or not.
-
-If set to one, sbd will only start if the node was previously shutdown
-cleanly (as indicated by an exit request message in the slot), or if the
-slot is empty. A reset, crashdump, or power-off request in any slot will
-halt the start up.
-
-This is useful to prevent nodes from rejoining if they were faulty. The
-node must be manually "unfenced" by sending an empty message to it:
-
-	sbd -d /dev/sda1 message node1 clear
-
-=item B<-s> I<N>
-
-Set the start-up wait time for devices. (Defaults to I<120>.)
-
-Dynamic block devices such as iSCSI might not be fully initialized and
-present yet. This allows to set a timeout for waiting for devices to
-appear on start-up. If set to 0, start-up will be aborted immediately if
-no devices are available.
-
-=item B<-Z>
-
-Enable trace mode. B<Warning: this is unsafe for production, use at your
-own risk!> Specifying this once will turn all reboots or power-offs, be
-they caused by self-fence decisions or messages, into a crashdump.
-Specifying this twice will just log them but not continue running.
-
-=item B<-T>
-
-By default, the daemon will set the watchdog timeout as specified in the
-device metadata. However, this does not work for every watchdog device.
-In this case, you must manually ensure that the watchdog timeout used by
-the system correctly matches the SBD settings, and then specify this
-option to allow C<sbd> to continue with start-up.
 
 =item B<-5> I<N>
 
 Warn if the time interval for tickling the watchdog exceeds this many seconds.
+That interval will be at least the loop timeout.
 Since the node is unable to log the watchdog expiry (it reboots immediately
 without a chance to write its logs to disk), this is very useful for getting
 an indication that the watchdog timeout is too short for the IO load of the
 system.
 
 Default is 3 seconds, set to zero to disable.
+If the watchdog timeout is set to a value exceeding 5, that value times 3/5
+is being used.
 
 =item B<-C> I<N>
 
-Watchdog timeout to set before crashdumping. If SBD is set to crashdump
+Watchdog timeout to set before crash-dumping. If B<SBD> is set to crash-dump
 instead of reboot - either via the trace mode settings or the I<external/sbd>
-fencing agent's parameter -, SBD will adjust the watchdog timeout to this
+fencing agent's parameter -, B<SBD> will adjust the watchdog timeout to this
 setting before triggering the dump. Otherwise, the watchdog might trigger and
-prevent a successful crashdump from ever being written.
+prevent a successful crash-dump from ever being written.
+
+The value set seems to be unused.
 
 Defaults to 240 seconds. Set to zero to disable.
 
+=item B<-c>
+
+Force a cluster check.
+If enabled, additional cluster checks are done periodically.
+
+=for comment
+The description should be improved by someone who knows how it really works.
+
+Usually cluster checks are enabled automatically.
+
+=item B<-F> I<N>
+
+Number of times a failing servant process will be restarted within the servant
+restart interval.
+If set to zero, servants will be restarted immediately and indefinitely.
+If set to one, a failed servant will be restarted once every servant restart
+interval.
+See also option C<-t>.
+Defaults to I<1>.
+
+=item B<-P>
+
+Enable Pacemaker integration which checks Pacemaker quorum and node health.
+Specify this an odd number of times to enable, an even number of times to
+disable.
+
+The default is enabled.
+
+=item B<-p> I<pid_file>
+
+Set the file to use as PID file to I<pid_file>.
+There is no default value, meaning a PID file will not be written.
+
+=for comment
+Somebody should explain the advantages/disadvantages of having a PID file.
+
+=item B<-S> I<N>
+
+Set the start mode.
+
+If this is set to I<zero>, B<sbd> will always start up unconditionally,
+regardless of whether the node was previously fenced or not.
+
+If set to I<one>, B<sbd> will only start if the node was previously shutdown
+cleanly (as indicated by an exit request message in the slot), or if the
+slot is empty.  A reset, crash-dump, or power-off request in any slot will
+halt the start up.
+
+This is useful to prevent nodes from rejoining if they were faulty. The
+node must be manually "unfenced" (cleared) by sending an empty message to it:
+
+	sbd -d /dev/sda1 message node1 clear
+
+See also L</Command "message"> for details.
+The default value is I<0>.
+
+=item B<-s> I<N>
+
+Set the start-up wait time for devices to I<N>.
+When starting, B<sbd> will wait up to I<N> seconds to read the header of the
+first disk device.
+If set to 0, start-up will be aborted immediately if no devices are available.
+Dynamic block devices such as iSCSI might take some time to become connected
+and thus operational.
+The default value is 120.
+=item B<-T>
+
+By default, the daemon will set the watchdog timeout as specified in the
+device metadata. However, this does not work for every watchdog device.
+In this case, you must manually ensure that the watchdog timeout used by
+the system correctly matches the SBD settings, and then specify this
+option to allow B<sbd> to continue with start-up.
+
+=item B<-t> I<N>
+
+Set the servant restart interval to I<N>.
+That interval is the time in which faulty servants are restarted.
+See also option C<-F 1>,
+Default is 5 seconds.
+
+If set to zero, processes will be restarted indefinitely and immediately.
+
+=item B<-W>
+
+Enable or disable use of the system watchdog.
+Use an odd number of times to enable, or an even number of times to disable.
+The default is enabled.
+
+=item B<-w> I<watchdog_device>
+
+Specify the watchdog device to use.
+If set to F</dev/null>, then no watchdog is being used.
+The default value is F</dev/watchdog>.
+
+=item B<-Z>
+
+Enable I<debug mode>.
+Using debug mode is unsafe for production, use at your own risk!
+Using I<once> will turn all reboots or power-offs, be they caused by
+self-fence decisions or messages, into a crash-dump.
+Specifying this I<twice> will just log them but not continue running.
+Specifying this I<three times> will call C<sync()> and add a ten second delay
+before the actual fencing operation takes place.
+The default value is off.
+
+=for comment
+It seems the node may still be reset! See do_exit()
+
 =back
 
-=head2 allocate
+Example:
 
-Example usage:
+	sbd -d /dev/sda1 -d /dev/sdb1 -P watch
+
+=head3 Command "allocate"
+
+B<sbd> B<-d>I<device>... B<allocate> I<node_name>
+
+Explicitly allocates a slot for the specified node name.
+This should rarely be necessary, as every node will automatically allocate
+itself a slot the first time it starts up in watch mode.
+
+=for comment
+Being able to allocate a list of node names in one command seems to be a
+useful enhancement!
+
+Example:
 
 	sbd -d /dev/sda1 allocate node1
 
-Explicitly allocates a slot for the specified node name. This should
-rarely be necessary, as every node will automatically allocate itself a
-slot the first time it starts up on watch mode.
+=head3 Command "message"
 
-=head2 message
+B<sbd> B<-d>I<device>... B<message> I<target_node> I<msg>
 
-Example usage:
+Writes message I<msg> to the slot allocated for I<target_node>.
+This is rarely done directly, but rather abstracted via the C<external/sbd>
+fencing agent configured as a cluster resource.
 
-	sbd -d /dev/sda1 message node1 test
-
-Writes the specified message to node's slot. This is rarely done
-directly, but rather abstracted via the C<external/sbd> fencing agent
-configured as a cluster resource.
-
-Supported message types are:
+Supported messages are:
 
 =over
 
-=item test
+=item C<test>
 
-This only generates a log message on the receiving node and can be used
-to check if SBD is seeing the device. Note that this could overwrite a
-fencing request send by the cluster, so should not be used during
-production.
+This is like a built-in PING for B<SBD> that also generates a log message on
+I<target_node> and can be used to check whether B<SBD> can communicate using
+the specified I<device>.
 
-=item reset
+As each message slot can only hold one message, this could overwrite an
+unprocessed fencing request in the same slot that had been sent by the cluster.
+So better avoid sending C<test> messages to live cluster nodes.
 
-Reset the target upon receipt of this message.
+=item C<reset>
 
-=item off
+Reset the target by writing C<b> to F</proc/sysrq-trigger>.
+Before that an emergency syslog message is sent, and L<sync(2)|sync> is called.
 
-Power-off the target.
+=item C<off>
 
-=item crashdump
+Power-off the target by writing C<o> to F</proc/sysrq-trigger>.
+Before that an emergency syslog message is sent, and L<sync(2)|sync> is called.
 
-Cause the target node to crashdump.
+=item C<crashdump>
 
-=item exit
+Cause the target node to crash-dump by writing C<c> to F</proc/sysrq-trigger>.
+Before that an emergency syslog message is sent, and L<sync(2)|sync> is called.
 
-This will make the C<sbd> daemon exit cleanly on the target. You should
-B<not> send this message manually; this is handled properly during
-shutdown of the cluster stack. Manually stopping the daemon means the
-node is unprotected!
+=item C<exit>
 
-=item clear
+This will initiate a clean exit of the B<sbd> daemon on the target.
+The disk servant processes (and also the master process) will terminate after
+having read the C<exit> message.
 
-This message indicates that no real message has been sent to the node.
-You should not set this manually; C<sbd> will clear the message slot
-automatically during start-up, and setting this manually could overwrite
-a fencing message by the cluster.
+As B<SBD> fencing for the target node is lost when the daemon exited, you
+should B<not> send this message to a live cluster node; also it is not
+necessary, because a shutdown of the cluster stack will do that.
+
+=item C<clear>
+
+This message indicates that no real message has been sent to the node,
+meaning it cancels any unprocessed message found in the message slot.
+B<SBD> will write a C<clear> message to its slot automatically during start-up.
 
 =back
 
-=head2 query-watchdog
+Example:
 
-Example usage:
+	sbd -d /dev/sda1 message node1 test
 
-	sbd query-watchdog
+=head3 Command "query-watchdog"
+
+B<sbd> B<query-watchdog>
 
 Check for available watchdog devices and print some info.
 
 B<Warning>: This command will arm the watchdog during query, and if your
 watchdog refuses disarming (for example, if its kernel module has the
-'nowayout' parameter set) this will reset your system.
+C<nowayout> parameter set) this will reset your system.
 
-=head2 test-watchdog
+Example:
 
-Example usage:
+	sbd query-watchdog
 
-	sbd test-watchdog [-w /dev/watchdog3]
+=head3 Command "test-watchdog"
 
-Test specified watchdog device (/dev/watchdog by default).
+B<sbd> B<test-watchdog>
+
+Test configured watchdog device.
 
 B<Warning>: This command will arm the watchdog and have your system reset
-in case your watchdog is working properly! If issued from an interactive
-session, it will prompt for confirmation.
+if your watchdog is working properly!
 
-=head1 Base system configuration
+If issued from an interactive session, it will prompt for confirmation.
 
-=head2 Configure a watchdog
+Example:
+
+	sbd [-w /dev/watchdog3] test-watchdog
+
+=head2 Base System Configuration
+
+=head3 Configure a Watchdog
 
 It is highly recommended that you configure your Linux system to load a
 watchdog driver with hardware assistance (as is available on most modern
@@ -431,20 +534,25 @@ No other software must access the watchdog timer; it can only be
 accessed by one process at any given time. Some hardware vendors ship
 systems management software that use the watchdog for system resets
 (f.e. HP ASR daemon). Such software has to be disabled if the watchdog
-is to be used by SBD.
+is to be used by B<SBD>.
 
-=head2 Choosing and initializing the block device(s)
+=head3 Choosing and initializing the Block Device(s)
 
 First, you have to decide if you want to use one, two, or three devices.
 
 If you are using multiple ones, they should reside on independent
-storage setups. Putting all three of them on the same logical unit for
-example would not provide any additional redundancy.
+storage devices.
+For example, putting more than one on the same logical unit would not provide
+any additional redundancy.
 
-The SBD device can be connected via Fibre Channel, Fibre Channel over
-Ethernet, or even iSCSI. Thus, an iSCSI target can become a sort-of
-network-based quorum server; the advantage is that it does not require
-a smart host at your third location, just block storage.
+The SBD device can be connected via Fibre Channel (FC), Fibre Channel over
+Ethernet (FCoE), or even iSCSI.
+
+=for comment
+What is the following sentence supposed to say?
+Thus, an iSCSI target can become a sort-of network-based quorum server;
+the advantage is that it does not require a smart host at your third location,
+just block storage.
 
 The SBD partitions themselves B<must not> be mirrored (via MD,
 DRBD, or the storage layer itself), since this could result in a
@@ -456,15 +564,23 @@ units on (multipath) storage.
 The block device(s) must be accessible from all nodes. (While it is not
 necessary that they share the same path name on all nodes, this is
 considered a very good idea.)
+When there are multiple paths to the device, the use of multipathd is highly
+recommended.
+Then you can define a convenient alias name as well
+(e.g. F</dev/disk/by-id/dm-name-SBD_1>).
 
-SBD will only use about one megabyte per device, so you can easily
-create a small partition, or very small logical units.  (The size of the
-SBD device depends on the block size of the underlying device. Thus, 1MB
-is fine on plain SCSI devices and SAN storage with 512 byte blocks. On
-the IBM s390x architecture in particular, disks default to 4k blocks,
+B<SBD> will only use about one megabyte per device, so you can easily
+create a small partition, or very small logical units.
+(The space required on the SBD device depends on the block size of the
+underlying device.
+Thus, 1MB is fine on plain SCSI devices and SAN storage with 512 byte blocks.
+On the IBM s390x architecture in particular, disks default to 4k blocks,
 and thus require roughly 4MB.)
 
-The number of devices will affect the operation of SBD as follows:
+=for comment
+Isn't that roughly 256kB for 512-bytes sectors, and 1MB for 4kB-sectors?
+
+The number of devices will affect the operation of B<SBD> as follows:
 
 =over
 
@@ -483,39 +599,51 @@ inhibit openais startup.
 This configuration is a trade-off, primarily aimed at environments where
 host-based mirroring is used, but no third storage device is available.
 
-SBD will not commit suicide if it loses access to one mirror leg; this
+B<SBD> will not commit suicide if it loses access to one mirror leg; this
 allows the cluster to continue to function even in the face of one outage.
 
-However, SBD will not fence the other side while only one mirror leg is
+However, B<SBD> will not fence the other side while only one mirror leg is
 available, since it does not have enough knowledge to detect an asymmetric
 split of the storage. So it will not be able to automatically tolerate a
 second failure while one of the storage arrays is down. (Though you
 can use the appropriate crm command to acknowledge the fence manually.)
 
+=for comment
+What is the paragraph above saying?: If one of two devices fails fencing is
+not done?
+Fencing can still be sent through the second device (unless some nodes see
+the first device only, while others see the second device only)!
+
 It will not start unless both devices are accessible on boot.
 
 =item Three devices
 
-In this most reliable and recommended configuration, SBD will only
+In this most reliable and recommended configuration, B<SBD> will only
 self-fence if more than one device is lost; hence, this configuration is
 resilient against temporary single device outages (be it due to failures
 or maintenance).  Fencing messages can still be successfully relayed if
 at least two devices remain accessible.
 
+=for comment
+According to the description above, there is no advantage for having three over
+having two devices: If two devices fail (as seen by the node), the node will
+fence.
+
 This configuration is appropriate for more complex scenarios where
 storage is not confined to a single array. For example, host-based
-mirroring solutions could have one SBD per mirror leg (not mirrored
+mirroring solutions could have one SBD device per mirror leg (not mirrored
 itself), and an additional tie-breaker on iSCSI.
 
 It will only start if at least two devices are accessible on boot.
 
 =back
 
-After you have chosen the devices and created the appropriate partitions
-and perhaps multipath alias names to ease management, use the C<sbd create>
-command described above to initialize the SBD metadata on them.
+After having prepared the devices, use the C<create> command described above
+to initialize the SBD metadata on them.
+Optionally you may allocate slots for each node that will use the SBD devices.
+Dumping the headers and listing the slots could be a final verification step.
 
-=head3 Sharing the block device(s) between multiple clusters
+=head4 Sharing the Block Device(s) between multiple Clusters
 
 It is possible to share the block devices between multiple clusters,
 provided the total number of nodes accessing them does not exceed I<255>
@@ -523,60 +651,63 @@ nodes, and they all must share the same SBD timeouts (since these are
 part of the metadata).
 
 If you are using multiple devices this can reduce the setup overhead
-required. However, you should B<not> share devices between clusters in
-different security domains.
+required.
+However, you should B<not> share devices between clusters in
+different security domains, because in principle each node can fence each
+other node using the same device.
 
 =head2 Configure SBD to start on boot
 
 On systems using C<sysvinit>, the C<openais> or C<corosync> system
-start-up scripts must handle starting or stopping C<sbd> as required
-before starting the rest of the cluster stack.
+start-up scripts must handle starting (and stopping) of the B<sbd> daemon as
+required before starting the rest of the cluster stack.
 
-For C<systemd>, sbd simply has to be enabled using
+For C<systemd>, B<sbd> simply has to be enabled using
 
 	systemctl enable sbd.service
 
-The daemon is brought online on each node before corosync and Pacemaker
+The daemon is brought online before corosync and Pacemaker
 are started, and terminated only after all other cluster components have
 been shut down - ensuring that cluster resources are never activated
-without SBD supervision.
+without B<SBD> supervision.
 
 =head2 Configuration via sysconfig
 
-The system instance of C<sbd> is configured via F</etc/sysconfig/sbd>.
+The system instance of B<sbd> is configured via F</etc/sysconfig/sbd>.
 In this file, you must specify the device(s) used, as well as any
 options to pass to the daemon:
 
 	SBD_DEVICE="/dev/sda1;/dev/sdb1;/dev/sdc1"
 	SBD_PACEMAKER="true"
 
-C<sbd> will fail to start if no C<SBD_DEVICE> is specified. See the
+B<SBD> will fail to start if no C<SBD_DEVICE> is specified. See the
 installed template for more options that can be configured here.
 
-=head2 Testing the sbd installation
+=head2 Testing the SBD installation
 
-After a restart of the cluster stack on this node, you can now try
-sending a test message to it as root, from this or any other node:
+As root send a C<test> message to any node being part of the SBD configuration
+(i.e. using the same devices):
 
 	sbd -d /dev/sda1 message node1 test
 
-The node will acknowledge the receipt of the message in the system logs:
+When a SBD daemon on the receiving node is properly configured, the node will
+acknowledge the receipt of the message in the system logs:
 
 	Aug 29 14:10:00 node1 sbd: [13412]: info: Received command test from node2
 
-This confirms that SBD is indeed up and running on the node, and that it
+This confirms that B<SBD> is indeed up and running on the node, and that it
 is ready to receive messages.
 
 Make B<sure> that F</etc/sysconfig/sbd> is identical on all cluster
 nodes, and that all cluster nodes are running the daemon.
 
-=head1 Pacemaker CIB integration
+=head2 Pacemaker CIB Integration
 
-=head2 Fencing resource
+=head3 Fencing Resource
 
-Pacemaker can only interact with SBD to issue a node fence if there is a
-configure fencing resource. This should be a primitive, not a clone, as
-follows:
+Pacemaker can only interact with B<SBD> to issue a node fence if there is a
+fencing resource configured.
+That should be a primitive, not a clone, as follows:
 
 	primitive fencing-sbd stonith:external/sbd \
 		params pcmk_delay_max=30
@@ -584,55 +715,146 @@ follows:
 This will automatically use the same devices as configured in
 F</etc/sysconfig/sbd>.
 
-While you should not configure this as a clone (as Pacemaker will register
-the fencing device on each node automatically), the I<pcmk_delay_max>
-setting enables random fencing delay which ensures, in a scenario where a
-split-brain scenario did occur in a two node cluster, that one of the nodes
-has a better chance to survive to avoid double fencing.
+As it is possible in a split-brain scenario that each node sends a fencing
+message to the other node at the same time, causing both nodes to be fences
+an instant later, the I<pcmk_delay_max> setting defines a random fencing delay
+which reduces the likelihood that both nodes are fenced (assuming node1 is
+fenced by B<SBD> while still delaying its fencing request for node2).
 
-SBD also supports turning the reset request into a crash request, which
-may be helpful for debugging if you have kernel crashdumping configured;
+B<SBD> also supports turning the reset request into a crash request, which
+may be helpful for debugging if you have kernel crash-dumping configured;
 then, every fence request will cause the node to dump core. You can
 enable this via the C<crashdump="true"> parameter on the fencing
 resource. This is B<not> recommended for production use, but only for
 debugging phases.
 
-=head2 General cluster properties
+=head3 General Cluster Properties
 
 You must also enable STONITH in general, and set the STONITH timeout to
 be at least twice the I<msgwait> timeout you have configured, to allow
-enough time for the fencing message to be delivered. If your I<msgwait>
-timeout is 60 seconds, this is a possible configuration:
+enough time for the fencing message to be delivered and processed.
+If your I<msgwait> timeout is 60 seconds, this is a possible configuration:
 
 	property stonith-enabled="true"
 	property stonith-timeout="120s"
 
 B<Caution>: if I<stonith-timeout> is too low for I<msgwait> and the
-system overhead, sbd will never be able to successfully complete a fence
+system overhead, B<sbd> will never be able to successfully complete a fence
 request. This will create a fencing loop.
+
+=for comment
+Because the cluster sees the node that should be dead is still alive, and thus
+re-issues a fencing request?
 
 Note that the sbd fencing agent will try to detect this and
 automatically extend the I<stonith-timeout> setting to a reasonable
-value, on the assumption that sbd modifying your configuration is
+value, on the assumption that B<sbd> modifying your configuration is
 preferable to not fencing.
 
-=head1 Management tasks
+=for comment
+Will the effect really be no fencing, or will the node be fenced by an earlier
+fence message while the cluster already issues a second or third?
 
-=head2 Recovering from temporary SBD device outage
+=head2 Management Tasks
+
+=head3 Recovering from temporary SBD Device Outage
 
 If you have multiple devices, failure of a single device is not immediately
-fatal. C<sbd> will retry to restart the monitor for the device every 5
-seconds by default. However, you can tune this via the options to the
-I<watch> command.
+fatal. B<sbd> will retry to restart the monitor for the device every 5
+seconds by default.
+See option B<-t> and L</Command "watch">.
 
-In case you wish the immediately force a restart of all currently
-disabled monitor processes, you can send a I<SIGUSR1> to the SBD
-I<inquisitor> process.
+=head1 SIGNALS
 
+=over
+
+=item B<SIGUSR1>
+
+Force an immediate restart of all currently disabled monitor processes by
+sending I<SIGUSR1> to the B<sbd> I<inquisitor> process.
+
+=back
+
+To be completed...
+
+=head1 EXIT STATUS
+
+=over
+
+=item B<0>
+
+Invocation was successful, or there were usage errors.
+
+=for comment
+Yes, after calling usage() there still is an exit(0)!
+
+=item B<1>
+
+Some error has been detected.
+
+=back
+
+To be refined...
+
+=head1 ENVIRONMENT
+
+=over
+
+=item B<SBD_DELAY_START>
+
+To be documented...
+
+=item B<SBD_DEVICE>
+
+To be documented...
+
+=item B<SBD_PACEMAKER>
+
+To be documented...
+
+=item B<SBD_PIDFILE>
+
+To be documented...
+
+=item B<SBD_STARTMODE>
+
+To be documented...
+
+=item B<SBD_WATCHDOG>
+
+To be documented...
+
+=item B<SBD_WATCHDOG_DEV>
+
+To be documented...
+
+=item B<SBD_WATCHDOG_TIMEOUT>
+
+=back
+
+=head1 FILES
+
+=over
+
+=item F</proc/sys/kernel/sysrq>
+
+To be documented...
+
+=item F</proc/sysrq-trigger>
+
+To be documented...
+
+=item F</sys/class/watchdog>
+
+To be documented...
+
+=back
 
 =head1 LICENSE
 
 Copyright (C) 2008-2013 Lars Marowsky-Bree
+
+Copyright (C) 2018 Ulrich Windl
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public

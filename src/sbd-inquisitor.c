@@ -928,86 +928,8 @@ int main(int argc, char **argv, char **envp)
                delay_start? (delay > 0 ? value: "msgwait") : "",
                delay_start? ")" : "");
 
-	while ((c = getopt(argc, argv, "czC:DPRTWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:")) != -1) {
+	while ((c = getopt(argc, argv, "1:2:3:4:5:C:cDd:F:hI:n:Pp:RS:s:Tt:vWw:Zz")) != -1) {
 		switch (c) {
-		case 'D':
-			break;
-		case 'Z':
-			debug_mode++;
-			cl_log(LOG_INFO, "Debug mode now at level %d", (int)debug_mode);
-			break;
-		case 'R':
-			skip_rt = 1;
-			cl_log(LOG_INFO, "Realtime mode deactivated.");
-			break;
-		case 'S':
-			start_mode = atoi(optarg);
-			cl_log(LOG_INFO, "Start mode set to: %d", (int)start_mode);
-			break;
-		case 's':
-			timeout_startup = atoi(optarg);
-			cl_log(LOG_INFO, "Start timeout set to: %d", (int)timeout_startup);
-			break;
-		case 'v':
-                    debug++;
-                    if(debug == 1) {
-                        sbd_log_filter_ctl(NULL, LOG_INFO);
-                        cl_log(LOG_INFO, "Verbose mode enabled.");
-
-                    } else if(debug == 2) {
-                        sbd_log_filter_ctl(NULL, LOG_DEBUG);
-                        cl_log(LOG_INFO, "Debug mode enabled.");
-
-                    } else if(debug == 3) {
-                        /* Go nuts, turn on pacemaker's logging too */
-                        sbd_log_filter_ctl("*", LOG_DEBUG);
-                        cl_log(LOG_INFO, "Debug library mode enabled.");
-                    }
-                    break;
-		case 'T':
-			watchdog_set_timeout = 0;
-			cl_log(LOG_INFO, "Setting watchdog timeout disabled; using defaults.");
-			break;
-		case 'W':
-			W_count++;
-			break;
-		case 'w':
-                        cl_log(LOG_NOTICE, "Using watchdog device '%s'", watchdogdev);
-                        free(watchdogdev);
-                        watchdogdev = strdup(optarg);
-                        watchdogdev_is_default = false;
-			break;
-		case 'd':
-#if SUPPORT_SHARED_DISK
-			recruit_servant(optarg, 0);
-#else
-                        fprintf(stderr, "Shared disk functionality not supported\n");
-			exit_status = -2;
-			goto out;
-#endif
-			break;
-		case 'c':
-			c_count++;
-			break;
-		case 'P':
-			P_count++;
-			break;
-		case 'z':
-			disk_priority = 0;
-			break;
-		case 'n':
-			local_uname = strdup(optarg);
-			cl_log(LOG_INFO, "Overriding local hostname to %s", local_uname);
-			break;
-		case 'p':
-			pidfile = strdup(optarg);
-			cl_log(LOG_INFO, "pidfile set to %s", pidfile);
-			break;
-		case 'C':
-			timeout_watchdog_crashdump = atoi(optarg);
-			cl_log(LOG_INFO, "Setting crashdump watchdog timeout to %d",
-					(int)timeout_watchdog_crashdump);
-			break;
 		case '1':
 			timeout_watchdog = atoi(optarg);
                         if(timeout_watchdog > 5) {
@@ -1028,15 +950,24 @@ int main(int argc, char **argv, char **envp)
 			cl_log(LOG_INFO, "Setting latency warning to %d",
 					(int)timeout_watchdog_warn);
 			break;
-		case 't':
-			servant_restart_interval = atoi(optarg);
-			cl_log(LOG_INFO, "Setting servant restart interval to %d",
-					(int)servant_restart_interval);
+		case 'C':
+			timeout_watchdog_crashdump = atoi(optarg);
+			cl_log(LOG_INFO, "Setting crashdump watchdog timeout to %d",
+					(int)timeout_watchdog_crashdump);
 			break;
-		case 'I':
-			timeout_io = atoi(optarg);
-			cl_log(LOG_INFO, "Setting IO timeout to %d",
-					(int)timeout_io);
+		case 'c':
+			c_count++;
+			break;
+		case 'D':
+			break;
+		case 'd':
+#if SUPPORT_SHARED_DISK
+			recruit_servant(optarg, 0);
+#else
+                        fprintf(stderr, "Shared disk functionality not supported\n");
+			exit_status = -2;
+			goto out;
+#endif
 			break;
 		case 'F':
 			servant_restart_count = atoi(optarg);
@@ -1046,6 +977,75 @@ int main(int argc, char **argv, char **envp)
 		case 'h':
 			usage();
 			return (0);
+		case 'I':
+			timeout_io = atoi(optarg);
+			cl_log(LOG_INFO, "Setting IO timeout to %d",
+					(int)timeout_io);
+			break;
+		case 'n':
+			local_uname = strdup(optarg);
+			cl_log(LOG_INFO, "Overriding local hostname to %s", local_uname);
+			break;
+		case 'P':
+			P_count++;
+			break;
+		case 'p':
+			pidfile = strdup(optarg);
+			cl_log(LOG_INFO, "pidfile set to %s", pidfile);
+			break;
+		case 'R':
+			skip_rt = 1;
+			cl_log(LOG_INFO, "Realtime mode deactivated.");
+			break;
+		case 'S':
+			start_mode = atoi(optarg);
+			cl_log(LOG_INFO, "Start mode set to: %d", (int)start_mode);
+			break;
+		case 's':
+			timeout_startup = atoi(optarg);
+			cl_log(LOG_INFO, "Start timeout set to: %d", (int)timeout_startup);
+			break;
+		case 'T':
+			watchdog_set_timeout = 0;
+			cl_log(LOG_INFO, "Setting watchdog timeout disabled; using defaults.");
+			break;
+		case 't':
+			servant_restart_interval = atoi(optarg);
+			cl_log(LOG_INFO, "Setting servant restart interval to %d",
+					(int)servant_restart_interval);
+			break;
+		case 'v':
+                    debug++;
+                    if(debug == 1) {
+                        sbd_log_filter_ctl(NULL, LOG_INFO);
+                        cl_log(LOG_INFO, "Verbose mode enabled.");
+
+                    } else if(debug == 2) {
+                        sbd_log_filter_ctl(NULL, LOG_DEBUG);
+                        cl_log(LOG_INFO, "Debug mode enabled.");
+
+                    } else if(debug == 3) {
+                        /* Go nuts, turn on pacemaker's logging too */
+                        sbd_log_filter_ctl("*", LOG_DEBUG);
+                        cl_log(LOG_INFO, "Debug library mode enabled.");
+                    }
+                    break;
+		case 'W':
+			W_count++;
+			break;
+		case 'w':
+                        cl_log(LOG_NOTICE, "Using watchdog device '%s'", watchdogdev);
+                        free(watchdogdev);
+                        watchdogdev = strdup(optarg);
+                        watchdogdev_is_default = false;
+			break;
+		case 'Z':
+			debug_mode++;
+			cl_log(LOG_INFO, "Debug mode now at level %d", (int)debug_mode);
+			break;
+		case 'z':
+			disk_priority = 0;
+			break;
 		default:
 			exit_status = -2;
 			goto out;
