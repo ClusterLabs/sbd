@@ -15,7 +15,7 @@
 
 # Please submit bugfixes or comments via http://bugs.opensuse.org/
 #
-%global commit e102d9ed7559a14156d4b1d714b766725155ad14
+%global commit 2d595fdde4f62278b96db1b7fb79aae5e990bb0b
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
 %global github_owner beekhof
 %global buildnum 1
@@ -24,7 +24,7 @@ Name:           sbd
 Summary:        Storage-based death
 License:        GPLv2+
 Group:          System Environment/Daemons
-Version:        1.3.1
+Version:        1.4.0
 Release:        0.%{buildnum}.%{shortcommit}.git%{?dist}
 Url:            https://github.com/%{github_owner}/%{name}
 Source0:        https://github.com/%{github_owner}/%{name}/archive/%{commit}/%{name}-%{commit}.tar.gz
@@ -113,6 +113,16 @@ rm -rf %{buildroot}
 %doc COPYING
 
 %changelog
+* Mon Jan 14 2019 <klaus.wenninger@aon.at> - 1.4.0-0.1.2d595fdd.git
+- updated travis-CI (ppc64le-build, fedora29, remove need for
+  alectolytic-build-container)
+- make watchdog-device-query easier to be handled by an SELinux-policy
+- configurable delay value for SBD_DELAY_START
+- use pacemaker's new pe api with constructors/destructors
+- make timeout-action executed by sbd configurable
+- init script for sysv systems
+- version bump to v1.4.0 to denote Pacemaker 2.0.0 compatibility
+
 * Fri Jun 29 2018 <klaus.wenninger@aon.at> - 1.3.1-0.1.e102d9ed.git
 - removed unneeded python-devel build-requirement
 - changed legacy corosync-devel to corosynclib-devel
