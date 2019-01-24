@@ -16,6 +16,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include <assert.h>
+
 #include "sbd.h"
 
 #define SBD_MSG_EMPTY	0x00
@@ -1046,11 +1048,7 @@ int servant(const char *diskname, int mode, const void* argp)
 	char uuid[37];
 	const struct servants_list_item *s = argp;
 
-	if (!diskname) {
-		cl_log(LOG_ERR, "Empty disk name %s.", diskname);
-		return -1;
-	}
-
+	assert(diskname != NULL);
 	cl_log(LOG_INFO, "Servant starting for device %s", diskname);
 
 	/* Block most of the signals */
