@@ -120,6 +120,7 @@ mon_timer_reconnect(gpointer data)
 		cl_log(LOG_INFO, "CIB reconnect successful");
 	}
 
+	notify_parent();
 	return FALSE;
 }
 
@@ -127,11 +128,71 @@ static void
 mon_cib_connection_destroy(gpointer user_data)
 {
 	if (cib) {
-		cib->cmds->signoff(cib);
-		set_servant_health(pcmk_health_transient, LOG_WARNING, "Disconnected from CIB");
-		timer_id_reconnect = g_timeout_add(reconnect_msec, mon_timer_reconnect, NULL);
+        int new_servant_health = pcmk_health_transient;
+        xmlNode *cib_copy = NULL;
+        pe_working_set_t data_set;
+        node_t *node;
+
+        /* use leftover info to check if we are running
+         * on a remote-node without active resources
+         */
+        if (current_cib) {
+            cib_copy = copy_xml(current_cib);
+            if (cli_config_update(&cib_copy, NULL, FALSE)) {
+                last_refresh = time(NULL);
+                set_working_set_defaults(&data_set);
+                data_set.input = cib_copy;
+                data_set.flags |= pe_flag_have_stonith_resource;
+                cluster_status(&data_set);
+                compute_status(&data_set);
+                node = pe_find_node(data_set.nodes, local_uname);
+                if ((node != NULL) &&
+                    (node->details->type == node_remote) &&
+                    (node->details->running_rsc == NULL)) {
+
+                    if (data_set.no_quorum_policy != no_quorum_suicide) {
+                        new_servant_health = pcmk_health_online;
+                        cl_log(LOG_INFO,
+                            "found remote node without remaining resources");
+                    } else {
+                        /* Assuming reason for setting no-quorum-policy
+                         * to suicide is hope to regain connectivity
+                         * by rebooting or simply for the case there
+                         * might be something wrong with ourself.
+                         * Alternative would be to make configurable
+                         * independently for remote-nodes in sbd-config,
+                         * via cluster-property or even on a per
+                         * remote-node basis as resource-attribute.
+                         */
+                        cl_log(LOG_INFO,
+                            "found remote node without remaining resources - "
+                            "still suiciding derived from no-quorum-policy");
+                    }
+                } else {
+                    cl_log(LOG_INFO, "assuming that there are still "
+                           "resources to be handled");
+                }
+                cleanup_calculations(&data_set);
+            } else {
+                cl_log(LOG_INFO, "cli_config_update failed");
+            }
+        } else {
+            cl_log(LOG_INFO, "found cib on destroy but current_cib is empty");
+        }
+        cib->cmds->signoff(cib);
+        set_servant_health(new_servant_health, LOG_WARNING,
+                           "Disconnected from CIB");
+		timer_id_reconnect = g_timeout_add(reconnect_msec,
+                                           mon_timer_reconnect, NULL);
 	}
 	cib_connected = 0;
+    if (current_cib) {
+        /* cleanup the copy and prevent status being evaluated
+         * again based on the old data
+         */
+        free_xml(current_cib);
+        current_cib = NULL;
+    }
 	return;
 }
 
@@ -260,6 +321,18 @@ compute_status(pe_working_set_t * data_set)
     node_t *node = pe_find_node(data_set->nodes, local_uname);
 
     updates++;
+
+    if (node != NULL) {
+        if (node->details->type == node_remote) {
+            cl_log(LOG_INFO,
+                "'%s' is a remote-node that has %sresources running",
+                local_uname, (node->details->running_rsc == NULL)?"no ":"");
+        } else {
+            cl_log(LOG_INFO, "'%s' is a full cluster-node", local_uname);
+        }
+    } else {
+        cl_log(LOG_INFO, "didn't find ourself (%s) in cib", local_uname);
+    }
 
     if (data_set->dc_node == NULL) {
         set_servant_health(pcmk_health_transient, LOG_INFO, "We don't have a DC right now.");
@@ -484,8 +557,10 @@ servant_pcmk(const char *diskname, int mode, const void* argp)
 		} while (exit_code == -ENOTCONN);
 
 		if (exit_code != 0) {
+            cl_log(LOG_WARNING, "Failed connecting to the cib");
 			clean_up(-exit_code);
 		}
+		cl_log(LOG_INFO, "Connected to cib");
 	}
 
 	mainloop = g_main_new(FALSE);
