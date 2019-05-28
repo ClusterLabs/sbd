@@ -55,6 +55,7 @@ static int reconnect_msec = 1000;
 static GMainLoop *mainloop = NULL;
 static guint notify_timer = 0;
 static crm_cluster_t cluster;
+static void clean_up(int rc);
 static gboolean sbd_remote_check(gpointer user_data);
 static long unsigned int find_pacemaker_remote(void);
 static void sbd_membership_destroy(gpointer user_data);
@@ -335,17 +336,8 @@ sbd_membership_destroy(gpointer user_data)
 {
     cl_log(LOG_WARNING, "Lost connection to %s", name_for_cluster_type(get_cluster_type()));
 
-    if (get_cluster_type() != pcmk_cluster_unknown) {
-#if SUPPORT_COROSYNC && CHECK_TWO_NODE
-        cmap_destroy();
-#endif
-    }
-
-    set_servant_health(pcmk_health_unclean, LOG_ERR, "Cluster connection terminated");
-    notify_parent();
-
-    /* Attempt to reconnect, the watchdog will take the node down if the problem isn't transient */
-    sbd_membership_connect();
+    /* Let the inquisitor handle reconnect by restarting the servant */
+    clean_up(EXIT_CLUSTER_DISCONNECT);
 }
 
 /*
@@ -533,6 +525,13 @@ find_pacemaker_remote(void)
 static void
 clean_up(int rc)
 {
+#if SUPPORT_COROSYNC && CHECK_TWO_NODE
+    cmap_destroy();
+#endif
+
+    if (rc >= 0) {
+        exit(rc);
+    }
     return;
 }
 
