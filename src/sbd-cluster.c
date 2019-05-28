@@ -67,12 +67,10 @@ static int reconnect_msec = 1000;
 static GMainLoop *mainloop = NULL;
 static guint notify_timer = 0;
 static crm_cluster_t cluster;
+static void clean_up(int rc);
 static gboolean sbd_remote_check(gpointer user_data);
 static long unsigned int find_pacemaker_remote(void);
 static void sbd_membership_destroy(gpointer user_data);
-#if CHECK_TWO_NODE
-static void cmap_destroy(void);
-#endif
 
 
 #if SUPPORT_PLUGIN
@@ -190,9 +188,9 @@ cmap_dispatch_callback (gint cmap_fd,
     /* CMAP connection lost */
     if (condition & G_IO_HUP) {
         cl_log(LOG_WARNING, "CMAP service connection lost\n");
-        cmap_destroy();
+        clean_up(EXIT_CLUSTER_DISCONNECT);
         /* remove the source from the main loop */
-        return G_SOURCE_REMOVE;
+        return G_SOURCE_REMOVE; /* never reached */
     }
     cmap_dispatch(cmap_handle, CS_DISPATCH_ALL);
     return G_SOURCE_CONTINUE;
@@ -557,6 +555,14 @@ find_pacemaker_remote(void)
 static void
 clean_up(int rc)
 {
+#if SUPPORT_COROSYNC && CHECK_TWO_NODE
+    cmap_destroy();
+#endif
+
+    if (rc >= 0) {
+        exit(rc);
+    }
+
     return;
 }
 

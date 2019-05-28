@@ -526,6 +526,20 @@ void inquisitor_child(void)
 									break;
 							}
 						}
+					} else if (sbd_is_cluster(s)) {
+						if (WIFEXITED(status)) {
+							switch(WEXITSTATUS(status)) {
+								case EXIT_CLUSTER_DISCONNECT:
+									cl_log(LOG_WARNING, "Cluster-Servant has exited (connection lost)");
+									s->restarts = 0;
+									s->restart_blocked = 0;
+									s->outdated = 1;
+									s->t_last.tv_sec = 0;
+									break;
+								default:
+									break;
+							}
+						}
 					}
 					cleanup_servant_by_pid(pid);
 				}
