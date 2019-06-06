@@ -35,6 +35,18 @@
 
 #if CHECK_TWO_NODE
 #include <glib-unix.h>
+// available since glib 2.58
+#ifndef G_SOURCE_FUNC
+#define G_SOURCE_FUNC(f) ((GSourceFunc) (void (*)(void)) (f))
+#endif
+// available since glib 2.32
+#ifndef G_SOURCE_REMOVE
+#define G_SOURCE_REMOVE FALSE
+#endif
+// available since glib 2.32
+#ifndef G_SOURCE_CONTINUE
+#define G_SOURCE_CONTINUE TRUE
+#endif
 #endif
 
 #include "sbd.h"
@@ -55,6 +67,7 @@ static int reconnect_msec = 1000;
 static GMainLoop *mainloop = NULL;
 static guint notify_timer = 0;
 static crm_cluster_t cluster;
+static void clean_up(int rc);
 static gboolean sbd_remote_check(gpointer user_data);
 static long unsigned int find_pacemaker_remote(void);
 static void sbd_membership_destroy(gpointer user_data);
@@ -168,10 +181,19 @@ static void sbd_cmap_notify_fn(
 }
 
 static gboolean
-cmap_dispatch_callback (gpointer user_data)
+cmap_dispatch_callback (gint cmap_fd,
+                        GIOCondition condition,
+                        gpointer user_data)
 {
+    /* CMAP connection lost */
+    if (condition & G_IO_HUP) {
+        cl_log(LOG_WARNING, "CMAP service connection lost\n");
+        clean_up(EXIT_CLUSTER_DISCONNECT);
+        /* remove the source from the main loop */
+        return G_SOURCE_REMOVE; /* never reached */
+    }
     cmap_dispatch(cmap_handle, CS_DISPATCH_ALL);
-    return TRUE;
+    return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -222,7 +244,7 @@ sbd_get_two_node(void)
             cl_log(LOG_WARNING, "Couldn't create source for cmap\n");
             goto out;
         }
-        g_source_set_callback(cmap_source, cmap_dispatch_callback, NULL, NULL);
+        g_source_set_callback(cmap_source, G_SOURCE_FUNC(cmap_dispatch_callback), NULL, NULL);
         g_source_attach(cmap_source, NULL);
     }
 
@@ -533,6 +555,14 @@ find_pacemaker_remote(void)
 static void
 clean_up(int rc)
 {
+#if SUPPORT_COROSYNC && CHECK_TWO_NODE
+    cmap_destroy();
+#endif
+
+    if (rc >= 0) {
+        exit(rc);
+    }
+
     return;
 }
 
