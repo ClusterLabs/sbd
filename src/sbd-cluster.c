@@ -90,6 +90,8 @@ static int cpg_membership_entries = -1;
 static cmap_handle_t cmap_handle = 0;
 static cmap_track_handle_t track_handle = 0;
 static GSource *cmap_source = NULL;
+
+static uint64_t orf_token_rx = 0, new_orf_token_rx = 0;
 #endif
 
 void
@@ -261,12 +263,19 @@ notify_timer_cb(gpointer data)
 
 #endif
         case pcmk_cluster_corosync:
-#if HAVE_DECL_PCMK_CLUSTER_CMAN
-        case pcmk_cluster_cman:
-#endif
-            /* TODO - Make a CPG call and only call notify_parent() when we get a reply */
+            if (cmap_get_uint64(cmap_handle, "runtime.totem.pg.mrp.srp.orf_token_rx", &new_orf_token_rx) == CS_OK) {
+//                cl_log(LOG_INFO, "orf_token_rx=%u", new_orf_token_rx);
+                if (orf_token_rx == new_orf_token_rx) // totem is frozen, don't notify parent
+                    break;
+                orf_token_rx = new_orf_token_rx;
+            }
             notify_parent();
             break;
+#if HAVE_DECL_PCMK_CLUSTER_CMAN
+        case pcmk_cluster_cman:
+            notify_parent();
+            break;
+#endif
 
         default:
             break;
