@@ -1100,6 +1100,9 @@ notify_parent(void)
         /* Our parent died unexpectedly. Triggering
          * self-fence. */
         cl_log(LOG_WARNING, "Our parent is dead.");
+	if (timeout_sysrq_char == 'c') {
+		watchdog_init();
+	}
         do_timeout_action();
     }
 

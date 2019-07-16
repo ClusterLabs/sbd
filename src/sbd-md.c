@@ -1139,6 +1139,9 @@ int servant_md(const char *diskname, int mode, const void* argp)
 		if (ppid == 1) {
 			/* Our parent died unexpectedly. Triggering
 			 * self-fence. */
+			if (timeout_sysrq_char == 'c') {
+				watchdog_init();
+			}
 			do_timeout_action();
 		}
 
