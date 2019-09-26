@@ -12,6 +12,7 @@ RefuseManualStart=true
 Type=forking
 PIDFile=@localstatedir@/run/sbd.pid
 EnvironmentFile=-@CONFIGDIR@/sbd
+ExecStartPre=@datadir@/@PACKAGE@/sbd.service.sh pre-start
 ExecStart=@sbindir@/sbd $SBD_OPTS -p @localstatedir@/run/sbd.pid watch
 ExecStop=@bindir@/kill -TERM $MAINPID
 

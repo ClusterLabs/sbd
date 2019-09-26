@@ -13,3 +13,13 @@ endif
 
 sbd_LDADD = $(glib_LIBS) $(libcoroipcc_LIBS)
 
+sbddir = $(datadir)/$(PACKAGE)
+sbd_SCRIPTS = sbd.service.sh
+
+install-exec-hook:
+	$(MKDIR_P) -- $(DESTDIR)/$(sbddir)
+	ln -s -f sbd.service.sh $(DESTDIR)/$(sbddir)/sbd_remote.service.sh
+
+uninstall-hook:
+	rm -f $(DESTDIR)/$(sbddir)/sbd_remote.service.sh
+	rmdir $(DESTDIR)/$(sbddir)

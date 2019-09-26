@@ -1,0 +1,277 @@
+#!/bin/bash
+#
+# Copyright (C) 2019 Yan Gao <ygao@suse.com>
+
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation; either
+# version 2 of the License, or (at your option) any later version.
+#
+# This software is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+
+rc=0
+
+unset LC_ALL; export LC_ALL
+unset LANGUAGE; export LANGUAGE
+
+SBD_BIN=@sbindir@/sbd
+SBD_CONFIG=@CONFIGDIR@/sbd
+
+# sbd.service or sbd_remote.service
+SERVICE=$(basename $0 | sed 's/.sh$//')
+
+print_msg() {
+	local PRIO="$1"
+	shift
+	local MSG="$*"
+
+	case "${PRIO}" in
+		crit)	PRIO="CRIT";;
+		err)	PRIO="ERROR";;
+		warn)	PRIO="WARNING";;
+		notice)	PRIO="NOTICE";;
+		info)	PRIO="INFO";;
+		debug) 	PRIO="DEBUG";;
+		*)	PRIO=`echo ${PRIO}| tr '[a-z]' '[A-Z]'`;;
+	esac
+
+	if [ "${PRIO}" = "CRIT" -o "${PRIO}" = "ERROR" ]; then
+		echo "${PRIO}: $MSG" >&2
+	else
+		echo "${PRIO}: $MSG"
+	fi
+}
+
+# Based on crm_is_true() from pacemaker's libcrmcommon
+crm_is_true() {
+	case "$1" in
+		true|TRUE|on|ON|yes|YES|y|Y|1)	true ;;
+		*)	false ;;
+	esac
+}
+
+# "systemctl show" prints time values in "friendly"/"rediculous" strings.
+# This is based on systemd's format_timespan() function
+service_time_str_to_sec() {
+	# According to systemd/src/basic/time-util.h
+	local SEC_PER_MINUTE=60
+	local SEC_PER_HOUR=$(($SEC_PER_MINUTE * 60))
+	local SEC_PER_DAY=$(($SEC_PER_HOUR * 24))
+	local SEC_PER_WEEK=$(($SEC_PER_DAY * 7))
+	local SEC_PER_MONTH=2629800
+	local SEC_PER_YEAR=31557600
+
+	local TIME_SEC=0
+
+	for VAL in "$@"; do
+		case "$VAL" in
+			*[0-9]y)
+				MULTIPLIER=$SEC_PER_YEAR
+				;;
+			*[0-9]month)
+				MULTIPLIER=$SEC_PER_MONTH
+				;;
+			*[0-9]w)
+				MULTIPLIER=$SEC_PER_WEEK
+				;;
+			*[0-9]d)
+				MULTIPLIER=$SEC_PER_DAY
+				;;
+			*[0-9]h)
+				MULTIPLIER=$SEC_PER_HOUR
+				;;
+			*[0-9]min)
+				MULTIPLIER=$SEC_PER_MINUTE
+				;;
+			*[0-9]s)
+				MULTIPLIER=1
+				;;
+			*[0-9]ms|*[0-9]us)
+				MULTIPLIER=0
+				;;
+			*)
+				return 1
+				;;
+		esac
+
+		local NUM="${VAL//[!0-9]/}"
+		TIME_SEC=$(($TIME_SEC + ($NUM * $MULTIPLIER)))
+	done
+
+	echo $TIME_SEC
+}
+
+# Based on crm_get_msec() from pacemaker's libcrmcommon
+crm_get_sec() {
+
+	case "$@" in
+		*[0-9]ms|*[0-9]msec)
+			MULTIPLIER=1
+			DIVISOR=1000
+			;;
+		*[0-9]us|*[0-9]usec)
+			MULTIPLIER=1
+			DIVISOR=1000000
+			;;
+		*[0-9]|*[0-9]s|*[0-9]sec)
+			MULTIPLIER=1
+			DIVISOR=1
+			;;
+		*[0-9]m|*[0-9]min)
+			MULTIPLIER=60
+			DIVISOR=1
+			;;
+		*[0-9]h|*[0-9]hr)
+			MULTIPLIER=3600
+			DIVISOR=1
+			;;
+		*)
+			return 1
+			;;
+	esac
+
+	local NUM="${@//[!0-9]/}"
+	local SEC=$(($NUM * $MULTIPLIER / $DIVISOR))
+	echo $SEC
+}
+
+get_service_timeout_start() {
+	# Debate about systemctl showing it as TimeoutStartUSec rather than
+	# the configured property name TimeoutStartSec is on-going:
+	# https://github.com/systemd/systemd/issues/2047
+	# In case it's changed in the future.
+	local TIMEOUT_START_PROPERTIES="TimeoutStartUSec TimeoutStartSec"
+
+	for TIMEOUT_START_PROPERTY in $TIMEOUT_START_PROPERTIES; do
+		local SERVICE_TIMEOUT_START_STR=$(systemctl show $SERVICE -p $TIMEOUT_START_PROPERTY --value)
+		if [ -n "$SERVICE_TIMEOUT_START_STR" ]; then
+			break
+		else
+			print_msg notice "Couldn't get '$TIMEOUT_START_PROPERTY' of $SERVICE"
+		fi
+	done
+
+	if [ -z "$SERVICE_TIMEOUT_START_STR" ]; then
+		return 1
+	fi
+
+	SERVICE_TIMEOUT_START=$(service_time_str_to_sec $SERVICE_TIMEOUT_START_STR)
+
+	if [ $? -ne 0 ]; then
+		print_msg notice "Unrecognized value $TIMEOUT_START_PROPERTY='$SERVICE_TIMEOUT_START_STR' of $SERVICE"
+		return 1
+	fi
+}
+
+validate_basis() {
+	if [ ! -x $SBD_BIN ]; then
+		print_msg err "'$SBD_BIN' not existing or not executable"
+		rc=1
+	fi
+
+	if [ -f $SBD_CONFIG ]; then
+		. $SBD_CONFIG
+	else
+		# sbd can start without sysconfig
+		print_msg notice "sbd is not configured with '$SBD_CONFIG'"
+	fi
+
+	if [ -n "$SBD_OPTS" ]; then
+		# Find if sbd start-up timeout (-s) is specified in $SBD_OPTS
+		SBD_TIMEOUT_STARTUP=$(echo "$SBD_OPTS" | awk -F '-s' '{print $2}' | awk '{print $1}')
+	fi
+
+	# sbd start-up timeout (-s) defaults to 120s
+	: ${SBD_TIMEOUT_STARTUP:=120}
+}
+
+validate_devices() {
+	if [ -z "$SBD_DEVICE" ]; then
+		# It could be that diskless sbd is intentionally used
+		print_msg notice "'SBD_DEVICE' not defined. Ignore this if diskless sbd is intentionally used."
+		return 0
+	fi
+
+	# Construct commandline for some common options
+	SBD_DEVS=${SBD_DEVICE%;}
+	SBD_DEVICE_ARGS="-d ${SBD_DEVS//;/ -d }"
+
+	SBD_DEVICE_LIST=${SBD_DEVS//;/ }
+	for DEVICE in $SBD_DEVICE_LIST; do
+		if [ ! -b $DEVICE ]; then
+			# Not hard error. sbd waits for them to appear within start-up timeout.
+			print_msg warn "'$DEVICE' not existing"
+		elif [ -x $SBD_BIN ]; then
+			$SBD_BIN -d $DEVICE dump >/dev/null 2>&1
+			if [ $? -ne 0 ]; then
+				print_msg warn "Failed to dump meta-data from '$DEVICE'. Make sure it's correctly initialized with 'sbd create' command."
+			fi
+		fi
+	done
+
+	if [ -x $SBD_BIN ]; then
+		MSGWAIT=$($SBD_BIN $SBD_DEVICE_ARGS dump 2>&1 | grep -m 1 msgwait | awk '{print $4}')
+	fi
+}
+
+validate_timeouts_start() {
+	get_service_timeout_start
+
+	# Not ideal but not strictly a mis-configuration.
+	if [ -n "$SERVICE_TIMEOUT_START" ] && [ $SERVICE_TIMEOUT_START -lt $SBD_TIMEOUT_STARTUP ]; then
+		print_msg notice "'TimeoutStartSec' (${SERVICE_TIMEOUT_START}s) of $SERVICE is shorter than sbd start-up timeout (${SBD_TIMEOUT_STARTUP}s, -s). The former will take effect."
+	fi
+
+	if crm_is_true "${SBD_DELAY_START}"; then
+		print_msg notice "It's recommended to set 'SBD_DELAY_START' to an explicit time value that is longer than 'corosync token timeout + consensus timeout + pcmk_delay_max/base + msgwait'"
+
+		if [ -n "$SERVICE_TIMEOUT_START" -a -n "$MSGWAIT" ] && [ $SERVICE_TIMEOUT_START -lt $MSGWAIT ]; then
+			print_msg err "'TimeoutStartSec' (${SERVICE_TIMEOUT_START}s) of $SERVICE is shorter than the configured 'msgwait' (${MSGWAIT}s) as 'SBD_DELAY_START' is enabled"
+			print_msg err "Please set 'TimeoutStartSec' of $SERVICE to be longer than the configured 'msgwait' (${MSGWAIT}s)"
+			rc=1
+		fi
+	else
+		DELAY=$(crm_get_sec "${SBD_DELAY_START}")
+		if [ $? -eq 0 -a -n "$DELAY" ]; then
+			if [ -n "$MSGWAIT" ] && [ $DELAY -lt $MSGWAIT ]; then
+				print_msg notice "'SBD_DELAY_START' (${DELAY}s) is shorter than the configured 'msgwait' (${MSGWAIT}s)"
+				print_msg notice "It's recommended to set 'SBD_DELAY_START' to a time value that is longer than 'corosync token timeout + consensus timeout + pcmk_delay_max/base + msgwait'"
+			fi
+
+			if [ -n "$SERVICE_TIMEOUT_START" ] && [ $SERVICE_TIMEOUT_START -lt $DELAY ]; then
+				print_msg err "'TimeoutStartSec' (${SERVICE_TIMEOUT_START}s) of $SERVICE is shorter than the configured 'SBD_DELAY_START' (${DELAY}s)"
+				print_msg err "Please set 'TimeoutStartSec' of $SERVICE to be longer than the configured 'SBD_DELAY_START' (${DELAY}s)"
+				rc=1
+			fi
+		fi
+	fi
+}
+
+validate_all() {
+	validate_basis
+	validate_devices
+	validate_timeouts_start
+}
+
+case "$1" in
+	validate-all)
+		validate_all
+		;;
+	pre-start)
+		validate_all
+		;;
+	*)
+		echo "Usage: $0 (pre-start|validate-all)"
+		rc=1
+		;;
+esac
+
+exit $rc
