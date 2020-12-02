@@ -15,7 +15,7 @@
 
 # Please submit bugfixes or comments via http://bugs.opensuse.org/
 #
-%global longcommit aca7907c1973f331a4f192a0d50e6443840daab6
+%global longcommit eb6daa6c398474c585263325937ff467c668a825
 %global shortcommit %(echo %{longcommit}|cut -c1-8)
 %global modified %(echo %{longcommit}-|cut -f2 -d-)
 %global github_owner Clusterlabs
@@ -37,7 +37,7 @@ Name:           sbd
 Summary:        Storage-based death
 License:        GPLv2+
 Group:          System Environment/Daemons
-Version:        1.4.1
+Version:        1.4.2
 Release:        99.%{buildnum}.%{shortcommit}.%{modified}git%{?dist}
 Url:            https://github.com/%{github_owner}/%{name}
 Source0:        https://github.com/%{github_owner}/%{name}/archive/%{longcommit}/%{name}-%{longcommit}.tar.gz
@@ -155,6 +155,45 @@ rm -rf %{buildroot}
 %{_libdir}/libsbdtestbed*
 
 %changelog
+* Wed Dec 2 2020 <klaus.wenninger@aon.at> - 1.4.2-99.1.eb6daa6c.git
+- improve build/CI-friendlyness
+- * travis: switch to F32 as build-host
+-           switch to F32 & leap-15.2
+-           changes for mock-2.0
+-           turn off loop-devices & device-mapper on x86_64 targets because
+-           of changes in GCE
+- * regressions.sh: get timeouts from disk-header to go with proper defaults
+-                   for architecture
+- * use configure for watchdog-default-timeout & others
+- * ship sbd.pc with basic sbd build information for downstream packages
+-   to use
+- * add number of commits since version-tag to build-counter
+
+- add robustness against misconfiguration / improve documentation
+- * add environment section to man-page previously just available in
+-   template-config
+- * inform the user to restart the sbd service after disk-initialization
+- * refuse to start if any of the configured device names is invalid
+- * add handshake to sync startup/shutdown with pacemakerd
+-   Previously sbd just waited for the cib-connnection to show up/go away
+-   which isn't robust at all.
+-   The new feature needs new pacemakerd-api as counterpart.
+-   Thus build checks for presence of pacemakerd-api.
+-   To simplify downstream adoption behavior is configurable at runtime
+-   via configure-file with a build-time-configurable default.
+- * refuse to start if qdevice-sync_timeout doesn't match watchdog-timeout
+-   Needed in particular as qdevice-sync_timeout delays quorum-state-update
+-   and has a default of 30s that doesn't match the 5s watchdog-timeout
+-   default.
+
+- Fix: sbd-pacemaker: handle new no_quorum_demote + robustness against new
+-                     policies added
+- Fix: agent: correctly compare string values when calculating timeout
+- Fix: scheduling: overhaul the whole thing
+- * prevent possible lockup when format in proc changes
+- * properly get and handle scheduler policy & prio
+- * on SCHED_RR failing push to the max with SCHED_OTHER
+
 * Tue Nov 19 2019 <klaus.wenninger@aon.at> - 1.4.1-99.1.aca7907c.git
 - improvements/clarifications in documentation
 - properly finalize cmap connection when disconnected from cluster
