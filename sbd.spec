@@ -15,7 +15,7 @@
 
 # Please submit bugfixes or comments via http://bugs.opensuse.org/
 #
-%global longcommit eb6daa6c398474c585263325937ff467c668a825
+%global longcommit bfeee963f7363720da91a018045ca6746d822ba0
 %global shortcommit %(echo %{longcommit}|cut -c1-8)
 %global modified %(echo %{longcommit}-|cut -f2 -d-)
 %global github_owner Clusterlabs
@@ -155,7 +155,7 @@ rm -rf %{buildroot}
 %{_libdir}/libsbdtestbed*
 
 %changelog
-* Wed Dec 2 2020 <klaus.wenninger@aon.at> - 1.4.2-99.1.eb6daa6c.git
+* Wed Dec 2 2020 <klaus.wenninger@aon.at> - 1.4.2-99.1.bfeee963.git
 - improve build/CI-friendlyness
 - * travis: switch to F32 as build-host
 -           switch to F32 & leap-15.2
