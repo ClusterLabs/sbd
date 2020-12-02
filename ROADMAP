@@ -1,6 +1,0 @@
-- Provide fence_sbd wrapper for use with pacemaker clusters that do not
-  support cluster-glue fencing agents
-
-- systemd integration for the start-up scripts
-
-- Support for corosync >1.4.x in the non-plugin mode
