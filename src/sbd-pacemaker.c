@@ -45,6 +45,11 @@
 #include <libgen.h>
 #include <sys/utsname.h>
 
+#ifdef __linux__
+#include <grp.h>  /* getgrnam_r, initgroups */
+#include <pwd.h>  /* getpwuid_r */
+#endif
+
 #include <config.h>
 
 #include <crm_config.h>
@@ -618,6 +623,80 @@ clean_up(int rc)
 	return;
 }
 
+#ifdef __linux__
+#define CLUSTER_GROUP  "haclient"
+/* Try to add well-known cluster stack group (CLUSTER_GROUP) as a supplementary
+   group to this root-privileged process for good measure (see the call site);
+   returns 0 in case of success, respective positive exit status (different
+   from 0, 1, and EXIT_MD_IO_FAIL...EXIT_MD_REQUEST_CRASHDUMP) otherwise. */
+static int
+add_cluster_group()
+{
+    int rc = 0;
+    long gr_limit = -1, pw_limit = -1, limit;
+    char *buf;
+    struct group group, *group_result;
+    struct passwd passwd, *passwd_result;
+    gid_t cluster_gid;
+
+    limit = sysconf(_SC_PAGESIZE);
+    limit = (limit > 0) ? limit : 4096;  /* assume sufficient, just in case */
+    gr_limit = sysconf(_SC_GETGR_R_SIZE_MAX);
+    gr_limit = (gr_limit > 0) ? gr_limit : limit;
+    pw_limit = sysconf(_SC_GETPW_R_SIZE_MAX);
+    limit = (gr_limit >= pw_limit) ? gr_limit : pw_limit;
+
+    if ((buf = malloc(limit)) == NULL) {
+        return 74;  /* EX_IOERR */
+    }
+
+    do {
+        rc = getgrnam_r(CLUSTER_GROUP, &group, buf, limit, &group_result);
+    } while (rc == -1 && errno == EINTR);
+    if (rc == -1 || group_result == NULL) {
+        if (rc == -1) {
+            cl_perror("Unable to get group entry for %s", CLUSTER_GROUP);
+            rc = 69;  /* EX_UNAVAILABLE */
+        } else {
+            cl_log(LOG_ERR, "Unable to get group entry for %s", CLUSTER_GROUP);
+            rc = 78;  /* EX_CONFIG */
+        }
+        goto bail;
+    }
+    cluster_gid = group.gr_gid;
+
+    do {
+        rc = getpwuid_r(0, &passwd, buf, limit, &passwd_result);
+    } while (rc == -1 && errno == EINTR);
+    if (rc == -1 || passwd_result == NULL) {
+        if (rc == -1) {
+            cl_perror("Unable to get passwd entry for UID=0");
+            rc = 69;  /* EX_UNAVAILABLE */
+        } else {
+            cl_log(LOG_ERR, "Unable to get passwd entry for UID=0");
+            rc = 78;  /* EX_CONFIG */
+        }
+        goto bail;
+    }
+
+    /* this is supposed to be root, hence (1) shall succeed and
+       (2) the root shall not gain any new unwanted group-based
+       access over what it already has per its standard supplementary
+       groups even if they have been explicitly dropped by now (not
+       the case now; root is usually just in its own group, too) */
+    rc = initgroups(passwd.pw_name, cluster_gid);
+    if (rc == -1) {
+        cl_perror("Unable to set supplementary group %s", CLUSTER_GROUP);
+        rc = (errno == EPERM) ? 77  /* EX_NOPERM */
+                              : 74  /* EX_IOERR */;
+    }
+
+bail:
+    free(buf);
+    return rc;
+}
+#endif
+
 int
 servant_pcmk(const char *diskname, int mode, const void* argp)
 {
@@ -627,6 +706,19 @@ servant_pcmk(const char *diskname, int mode, const void* argp)
     cl_log(LOG_NOTICE, "Monitoring Pacemaker health");
     set_proc_title("sbd: watcher: Pacemaker");
         setenv("PCMK_watchdog", "true", 1);
+
+#ifdef __linux__
+        /* since we run this as root, we may actually be prevented from
+           accessing hacluster:haclient owned shared IPC mmap'd files of,
+           e.g., pacemakerd-based ("CIB daemon") in some cases where
+           root is not "all powerful" (e.g. under strict SELinux
+           confinement not allowing a DAC_OVERRIDE for any reasons)
+           TODO: first check if CAP_DAC_OVERRIDE is missing? */
+        if ((exit_code = add_cluster_group()) > 0) {
+            cl_log(LOG_CRIT, "Unable to ensure Pacemaker can be watched");
+            clean_up(exit_code);
+        }
+#endif
 
         if(debug == 0) {
             /* We don't want any noisy crm messages */
