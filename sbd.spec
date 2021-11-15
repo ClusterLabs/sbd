@@ -15,7 +15,7 @@
 
 # Please submit bugfixes or comments via http://bugs.opensuse.org/
 #
-%global longcommit 2a00ac70f7200ed238a5bc73392e6a59a06fe904
+%global longcommit 7bcdf69597042c31ea0b4a523e732d4bbb99b3a0
 %global shortcommit %(echo %{longcommit}|cut -c1-8)
 %global modified %(echo %{longcommit}-|cut -f2 -d-)
 %global github_owner Clusterlabs
@@ -51,7 +51,7 @@ Name:           sbd
 Summary:        Storage-based death
 License:        GPLv2+
 Group:          System Environment/Daemons
-Version:        1.5.0
+Version:        1.5.1
 Release:        99.%{buildnum}.%{shortcommit}.%{modified}git%{?dist}
 Url:            https://github.com/%{github_owner}/%{name}
 Source0:        https://github.com/%{github_owner}/%{name}/archive/%{longcommit}/%{name}-%{longcommit}.tar.gz
@@ -173,6 +173,23 @@ rm -rf %{buildroot}
 %{_libdir}/libsbdtestbed*
 
 %changelog
+* Mon Nov 15 2021 <klaus.wenninger@aon.at> - 1.5.1-99.0.7bcdf695.git
+- improve/fix cmdline handling
+  - tell the actual watchdog device specified with -w
+  - tolerate and strip any leading spaces of commandline option values
+  - Sanitize numeric arguments
+- if start-delay enabled, not explicitly given and msgwait can't be
+  read from disk (diskless) use 2 * watchdog-timeout
+- avoid using deprecated valloc for disk-io-buffers
+- avoid frequent alloc/free of aligned buffers to prevent fragmentation
+- fix memory-leak in one-time-allocations of sector-buffers
+- fix AIO-API usage: properly destroy io-context
+- improve/fix build environment
+  - validate configure options for paths
+  - remove unneeded complexity of configure.ac hierarchy
+  - correctly derive package version from git (regression since 1.5.0)
+  - make runstatedir configurable and derive from distribution
+
 * Tue Jun 8 2021 <klaus.wenninger@aon.at> - 1.5.0-99.0.2a00ac70.git
 - default to resource-syncing with pacemaker in spec-file and configure.ac
   This default has to match between sbd and pacemaker and

@@ -20,7 +20,7 @@ dnl     checks for library functions
 dnl     checks for system services
 
 AC_INIT([sbd], 
-	[1.5.0],
+	[1.5.1],
 	[lmb@suse.com])
 m4_include([tests-opt.m4])
 AC_CANONICAL_HOST
