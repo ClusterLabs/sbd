@@ -1276,10 +1276,17 @@ int main(int argc, char **argv, char **envp)
             goto out;
         }
 #else
-        if (!sync_resource_startup) {
+        if (!sync_resource_startup && check_pcmk) {
             cl_log(LOG_WARNING, "SBD built against pacemaker supporting "
                              "pacemakerd-API. Should think about enabling "
                              "SBD_SYNC_RESOURCE_STARTUP.");
+        }
+
+        if (sync_resource_startup && !check_pcmk) {
+            fprintf(stderr, "Failed to sync resource-startup as "
+                "pacemaker checks are off.\n");
+            exit_status = -1;
+            goto out;
         }
 #endif
     }
