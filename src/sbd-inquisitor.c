@@ -1281,13 +1281,6 @@ int main(int argc, char **argv, char **envp)
                              "pacemakerd-API. Should think about enabling "
                              "SBD_SYNC_RESOURCE_STARTUP.");
         }
-
-        if (sync_resource_startup && !check_pcmk) {
-            fprintf(stderr, "Failed to sync resource-startup as "
-                "pacemaker checks are off.\n");
-            exit_status = -1;
-            goto out;
-        }
 #endif
     }
 
