@@ -44,6 +44,7 @@
 #include <qb/qblog.h>
 #include <crm_config.h>
 #include <config.h>
+#include <crm/common/mainloop.h>
 
 /* signals reserved for multi-disk sbd */
 #define SIG_LIVENESS (SIGRTMIN + 1)	/* report liveness of the disk */
@@ -102,6 +103,19 @@ struct servants_list_item {
 	int first_start;
 	struct timespec t_last, t_started;
 	struct servants_list_item *next;
+
+	const char *command;
+	int timeout;
+	int rc;
+	int synchronous;
+
+	char *stdout_data;
+	char *stderr_data;
+
+	int stdout_fd;
+	int stderr_fd;
+	mainloop_io_t *stdout_gsource;
+	mainloop_io_t *stderr_gsource;
 };
 
 struct sbd_context {
@@ -173,6 +187,8 @@ extern const char* cmdname;
 typedef int (*functionp_t)(const char* devname, int mode, const void* argp);
 
 int assign_servant(const char* devname, functionp_t functionp, int mode, const void* argp);
+int assign_servant_with_pipes(struct servants_list_item *servant,
+                              functionp_t functionp, int mode, const void *argp);
 
 #if SUPPORT_SHARED_DISK
 void open_any_device(struct servants_list_item *servants);
@@ -180,7 +196,7 @@ int init_devices(struct servants_list_item *servants);
 int allocate_slots(const char *name, struct servants_list_item *servants);
 int list_slots(struct servants_list_item *servants);
 int ping_via_slots(const char *name, struct servants_list_item *servants);
-int dump_headers(struct servants_list_item *servants);
+int query_devices(struct servants_list_item *servants, const char *command);
 unsigned long get_first_msgwait(struct servants_list_item *servants);
 int messenger(const char *name, const char *msg, struct servants_list_item *servants);
 int servant_md(const char *diskname, int mode, const void* argp);
