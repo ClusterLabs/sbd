@@ -248,14 +248,14 @@ void servants_start(void)
 	}
 }
 
-void servants_kill(void)
+void servants_kill(int sig)
 {
 	struct servants_list_item *s;
 	union sigval svalue;
 
 	for (s = servants_leader; s; s = s->next) {
 		if (s->pid != 0)
-			sigqueue(s->pid, SIGKILL, svalue);
+			sigqueue(s->pid, sig, svalue);
 	}
 }
 
@@ -536,7 +536,7 @@ void inquisitor_child(void)
 		clock_gettime(CLOCK_MONOTONIC, &t_now);
 
 		if (sig == SIG_EXITREQ || sig == SIGTERM) {
-			servants_kill();
+			servants_kill(SIGKILL);
 			watchdog_close(true);
 			exiting = 1;
 		} else if (sig == SIGCHLD) {
@@ -610,6 +610,8 @@ void inquisitor_child(void)
 			if (exiting)
 				continue;
 			servants_start();
+		} else if (sig == SIGUSR2) {
+			servants_kill(SIGUSR2);
 		}
 
 		if (exiting) {
@@ -718,7 +720,7 @@ void inquisitor_child(void)
                      */
                     cl_log(LOG_DEBUG, "Decoupling");
                     if (inquisitor_decouple() < 0) {
-                        servants_kill();
+                        servants_kill(SIGKILL);
                         exiting = 1;
                         continue;
                     } else {
@@ -734,7 +736,7 @@ void inquisitor_child(void)
 				/* We're still being watched by our
 				 * parent. We don't fence, but exit. */
 				cl_log(LOG_ERR, "SBD: Not enough votes to proceed. Aborting start-up.");
-				servants_kill();
+				servants_kill(SIGKILL);
 				exiting = 1;
 				continue;
 			}

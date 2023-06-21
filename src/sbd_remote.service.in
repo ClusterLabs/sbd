@@ -11,7 +11,7 @@ Type=forking
 PIDFile=@runstatedir@/sbd.pid
 EnvironmentFile=-@CONFIGDIR@/sbd
 ExecStart=@sbindir@/sbd $SBD_OPTS -p @runstatedir@/sbd.pid watch
-ExecStop=@bindir@/kill -TERM $MAINPID
+ExecStop=@bindir@/kill -USR2 $MAINPID
 
 # Could this benefit from exit codes for restart?
 # Does this need to be set to msgwait * 1.2?

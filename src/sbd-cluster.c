@@ -58,7 +58,16 @@ static crm_cluster_t cluster;
 static gboolean sbd_remote_check(gpointer user_data);
 static long unsigned int find_pacemaker_remote(void);
 static void sbd_membership_destroy(gpointer user_data);
+static bool wait_for_pacemaker_remote_lost = false;
 
+static void signal_exitreq(void)
+{
+    union sigval signal_value;
+    pid_t ppid = getppid();
+
+    memset(&signal_value, 0, sizeof(signal_value));
+    sigqueue(ppid, SIG_EXITREQ, signal_value);
+}
 
 #if SUPPORT_PLUGIN
 static void
@@ -675,6 +684,10 @@ sbd_remote_check(gpointer user_data)
         set_servant_health(pcmk_health_online, LOG_INFO,
                            "Connected to Pacemaker Remote %lu", (long unsigned int)remoted_pid);
     } else {
+        if (wait_for_pacemaker_remote_lost) {
+            signal_exitreq();
+            return true;
+        }
         set_servant_health(pcmk_health_unclean, LOG_WARNING,
                            "Connection to Pacemaker Remote %lu lost", (long unsigned int)remoted_pid);
     }
@@ -742,6 +755,16 @@ cluster_shutdown(int nsig)
     clean_up(0);
 }
 
+static void
+trigger_wait_for_pacemaker_remote_lost(int nsig)
+{
+    /* if we've never seen pacemaker_remoted request exit immeditely */
+    if ((remoted_pid <= 0) || !remote_node) {
+        signal_exitreq();
+    }
+    wait_for_pacemaker_remote_lost = true;
+}
+
 int
 servant_cluster(const char *diskname, int mode, const void* argp)
 {
@@ -761,6 +784,7 @@ servant_cluster(const char *diskname, int mode, const void* argp)
 
     mainloop_add_signal(SIGTERM, cluster_shutdown);
     mainloop_add_signal(SIGINT, cluster_shutdown);
+	mainloop_add_signal(SIGUSR2, trigger_wait_for_pacemaker_remote_lost);
     
     g_main_loop_run(mainloop);
     g_main_loop_unref(mainloop);
