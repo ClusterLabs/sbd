@@ -33,7 +33,11 @@
 : ${SBD_TRANSLATE_AIO:= "no"}
 
 sbd() {
-	LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${SBD_DEVICE}" SBD_PRELOAD_LOG=${SBD_PRELOAD_LOG} SBD_WATCHDOG_DEV=/dev/watchdog setsid ${SBD_BINARY} -p ${SBD_PIDFILE} "$@"
+	LD_BIND_NOW=yes LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${SBD_DEVICE}" SBD_PRELOAD_LOG=${SBD_PRELOAD_LOG} SBD_WATCHDOG_DEV=/dev/watchdog setsid ${SBD_BINARY} -p ${SBD_PIDFILE} "$@"
+}
+
+sbd_sleep() {
+	TIME="delay %es" time sleep $1
 }
 
 sbd_wipe_disk() {
@@ -134,7 +138,7 @@ sbd_daemon_cleanup() {
 	fi
 	if [[ "${SBD_PIDFILE}" != "" ]]; then
 		pkill -TERM --pidfile ${SBD_PIDFILE} 2>/dev/null
-		sleep 5
+		sbd_sleep 5
 		pkill -KILL --pidfile ${SBD_PIDFILE} 2>/dev/null
 		pkill -KILL --parent "$(cat ${SBD_PIDFILE} 2>/dev/null)" 2>/dev/null
 		echo > ${SBD_PIDFILE}
@@ -265,10 +269,10 @@ test_stall_inquisitor() {
 	echo "Stall inquisitor test"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -n test-1 watch
-	sleep 10
+	sbd_sleep 10
 	_ok kill -0 "$(cat ${SBD_PIDFILE})"
 	kill -STOP "$(cat ${SBD_PIDFILE})"
-	sleep $((${WATCHDOG_TIMEOUT} * 2))
+	sbd_sleep $((${WATCHDOG_TIMEOUT} * 2))
 	kill -CONT "$(cat ${SBD_PIDFILE})" 2>/dev/null
 	_in_log "watchdog fired"
 }
@@ -277,9 +281,9 @@ test_wipe_slots1() {
 	echo "Wipe slots test (with watchdog)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} -n test-1 watch
-	sleep 2
+	sbd_sleep 2
 	sbd_wipe_disk ${D[1]}
-	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
+	sbd_sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "watchdog fired"
 }
 
@@ -288,9 +292,9 @@ test_wipe_slots2() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	sbd_sleep 2
 	sbd_wipe_disk ${D[1]}
-	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
+	sbd_sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('b')"
 	_in_log "reboot (reboot)"
 }
@@ -300,9 +304,9 @@ test_message1() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	sbd_sleep 2
 	sbd -d ${D[1]} message test-1 reset
-	sleep 2
+	sbd_sleep 2
 	_in_log "sysrq-trigger ('b')"
 	_in_log "reboot (reboot)"
 }
@@ -312,9 +316,9 @@ test_message2() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	sbd_sleep 2
 	sbd -d ${D[1]} message test-1 off
-	sleep 2
+	sbd_sleep 2
 	_in_log "sysrq-trigger ('o')"
 	_in_log "reboot (poweroff)"
 }
@@ -324,9 +328,9 @@ test_message3() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	sbd_sleep 2
 	sbd -d ${D[1]} message test-1 crashdump
-	sleep 2
+	sbd_sleep 2
 	_in_log "sysrq-trigger ('c')"
 }
 
@@ -335,9 +339,9 @@ test_timeout_action1() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	SBD_TIMEOUT_ACTION=off sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	sbd_sleep 2
 	sbd_wipe_disk ${D[1]}
-	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
+	sbd_sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('o')"
 	_in_log "reboot (poweroff)"
 }
@@ -347,9 +351,9 @@ test_timeout_action2() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	SBD_TIMEOUT_ACTION=crashdump sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	sbd_sleep 2
 	sbd_wipe_disk ${D[1]}
-	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
+	sbd_sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('c')"
 }
 
@@ -360,9 +364,11 @@ echo "SBD_TRANSLATE_AIO = \"${SBD_TRANSLATE_AIO}"\"
 
 sbd_setup
 
+MOUNTPOINT=$((mount|grep ${SBD_IMGPATH} || echo unknown)|cut -f1 -d" ")
 _ok test "${WATCHDOG_TIMEOUT}" -eq "${WATCHDOG_TIMEOUT}"
 _ok test "${MSGWAIT_TIMEOUT}" -eq "${MSGWAIT_TIMEOUT}"
 echo "running sbd-tests with WATCHDOG_TIMEOUT=${WATCHDOG_TIMEOUT}s MSGWAIT_TIMEOUT=${MSGWAIT_TIMEOUT}s"
+echo "on randomly named images in SBD_IMGPATH=\"${SBD_IMGPATH}\" on ${MOUNTPOINT} filesystem"
 
 if [[ "${SBD_PRELOAD}" != "" ]]; then
 	SBD_DAEMON_TESTS="watchdog stall_inquisitor wipe_slots1 wipe_slots2 message1 message2 message3 timeout_action1 timeout_action2"

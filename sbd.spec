@@ -76,6 +76,7 @@ BuildRequires:  libuuid-devel
 BuildRequires:  libxml2-devel
 BuildRequires:  pkgconfig
 BuildRequires:  make
+BuildRequires:  time
 Conflicts:      fence-agents-sbd < 4.5.0
 
 %if 0%{?rhel} > 0
@@ -97,6 +98,7 @@ Available rpmbuild rebuild options:
 Summary:        Storage-based death environment for regression tests
 License:        GPL-2.0-or-later
 Group:          System Environment/Daemons
+Requires:       time
 
 %description tests
 This package provides an environment + testscripts for

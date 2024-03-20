@@ -69,6 +69,10 @@ typedef int (*orig_io_getevents_f_type)(io_context_t ctx_id, long min_nr, long n
                 struct io_event *events, struct timespec *timeout);
 typedef int (*orig_io_cancel_f_type)(io_context_t ctx_id, struct iocb *iocb,
                 struct io_event *result);
+typedef int (*orig_io_pgetevents_f_type)(io_context_t ctx_id, long min_nr, long nr,
+                struct io_event *events, struct timespec *timeout,
+                sigset_t *sigmask);
+
 
 static int is_init = 0;
 static FILE *log_fp = NULL;
@@ -98,6 +102,7 @@ static orig_io_destroy_f_type orig_io_destroy = NULL;
 static orig_io_submit_f_type orig_io_submit = NULL;
 static orig_io_getevents_f_type orig_io_getevents = NULL;
 static orig_io_cancel_f_type orig_io_cancel = NULL;
+static orig_io_pgetevents_f_type orig_io_pgetevents = NULL;
 
 /* fprintf is inlined as __fprintf_chk or
  * we have vfprintf.
@@ -154,17 +159,12 @@ init (void)
         orig_fopen        = (orig_fopen_f_type)dlsym_fatal(RTLD_NEXT,"fopen");
         orig_fclose       = (orig_fclose_f_type)dlsym_fatal(RTLD_NEXT,"fclose");
 
-        handle = dlopen("libaio.so.1",  RTLD_NOW);
-        if (!handle) {
-            fprintf(stderr, "Failed opening libaio.so.1\n");
-            exit(1);
-        }
-        orig_io_setup     = (orig_io_setup_f_type)dlsym_fatal(handle,"io_setup");
-        orig_io_destroy   = (orig_io_destroy_f_type)dlsym_fatal(handle,"io_destroy");
-        orig_io_submit    = (orig_io_submit_f_type)dlsym_fatal(handle,"io_submit");
-        orig_io_getevents = (orig_io_getevents_f_type)dlsym_fatal(handle,"io_getevents");
-        orig_io_cancel    = (orig_io_cancel_f_type)dlsym_fatal(handle,"io_cancel");
-        dlclose(handle);
+        orig_io_setup     = (orig_io_setup_f_type)dlsym_fatal(RTLD_NEXT,"io_setup");
+        orig_io_destroy   = (orig_io_destroy_f_type)dlsym_fatal(RTLD_NEXT,"io_destroy");
+        orig_io_submit    = (orig_io_submit_f_type)dlsym_fatal(RTLD_NEXT,"io_submit");
+        orig_io_getevents = (orig_io_getevents_f_type)dlsym_fatal(RTLD_NEXT,"io_getevents");
+        orig_io_cancel    = (orig_io_cancel_f_type)dlsym_fatal(RTLD_NEXT,"io_cancel");
+        orig_io_pgetevents= io_pgetevents; /* reference something we don't wrap */
 
         value = getenv("SBD_PRELOAD_LOG");
         if (value) {
@@ -203,7 +203,7 @@ init (void)
     }
 }
 
-// ***** end - handling of watchdog & block-devices ****
+// ***** handling of watchdog & block-devices ****
 
 static gboolean
 watchdog_timeout_notify(gpointer data)
