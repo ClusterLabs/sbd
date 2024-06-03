@@ -32,6 +32,154 @@ SBD_DEVS=${sbd_device%;}
 
 sbd_device=${SBD_DEVS//;/ -d }
 
+sbd_cmd_output() {
+	local pid=$1
+	local fd=$2
+	local call_wait=$3
+	local any_output=0
+	local failed=0
+	local rc=0
+	running=0
+	unknown_hanging=0
+
+	# Async IO timeout defaults to 3 seconds
+	while read -t 5 line; do
+		echo "$line"
+		any_output=1
+
+	        # Indicator of failure in case that stderr is retrieved
+		if [[ "$line" == *"sbd failed"* ]]; then
+			failed=1
+		fi
+	done <&$fd
+
+	# Command exited
+	if ! $(kill -0 $pid > /dev/null 2>&1); then
+		# Safe now to retrieve any remaining output without specifying timeout
+		while read line; do
+			echo "$line"
+			any_output=1
+
+			if [[ "$line" == *"sbd failed"* ]]; then
+				failed=1
+			fi
+		done <&$fd
+
+		# Determine the exit status
+		# bash's wait command only recongizes the latest child even if the pids of the previous children were saved.
+		if [ $call_wait -ne 0 ]; then
+			wait $pid
+			return $?
+		# Let's assume one that printed anything other than explicit failure to stdout has succeeded.
+		elif [ $any_output -ne 0 -a $failed -eq 0 ]; then
+			return 0
+		else
+			return 1
+		fi
+
+	# Command still existing
+	else
+		running=1
+		# Failed but hanging. Don't wait for it any more.
+		if [ $failed -ne 0 ]; then
+			return 1
+		else
+			unknown_hanging=1
+			return 1
+		fi
+	fi
+
+	return $rc
+}
+
+sbd_cmd_get_stdout() {
+	local devices=${SBD_DEVS//;/ }
+        local cmd="$1"
+	local rc=0
+	local success_count=0
+	local unknown_hanging_procs=""
+
+	for device in $devices; do
+		exec {fd}< <(sbd -d $device $cmd)
+		pid=$!
+
+		sbd_cmd_output $pid $fd 1
+		cmd_rc=$?
+
+		if [ $cmd_rc -eq 0 ]; then
+			success_count=$((success_count + 1))
+		else
+			rc=$cmd_rc
+		fi
+
+		if [ $unknown_hanging -ne 0 ]; then
+			unknown_hanging_procs+="$pid:$fd "
+		fi
+	done
+
+	if [ -z "$unknown_hanging_procs" -o $success_count -gt 0 ]; then
+		return $rc
+	fi
+
+	# We didn't get any successful output
+	# Desperately wait for the ones hanging in unknown state
+	while true; do
+		local running_count=0
+
+		for proc in $unknown_hanging_procs; do
+			pid=${proc%:*}
+			fd=${proc#*:}
+
+			sbd_cmd_output $pid $fd 0
+			cmd_rc=$?
+
+			if [ $cmd_rc -eq 0 ]; then
+				success_count=$((success_count + 1))
+			else
+				rc=$cmd_rc
+			fi
+
+			if [ $running -ne 0 ]; then
+				running_count=$((running_count + 1))
+			fi
+		done
+
+		if [ $success_count -gt 0 -o $running_count -eq 0 ]; then
+			return $rc
+		fi
+	done
+
+	return $rc
+}
+
+sbd_cmd_check_error() {
+	local devices=${SBD_DEVS//;/ }
+        local cmd="$1"
+	local rc=0
+
+	for device in $devices; do
+		exec {fd}< <(sbd -d $device $cmd 2>&1 >/dev/null)
+		pid=$!
+
+		while true; do
+			sbd_cmd_output $pid $fd 1
+			local cmd_rc=$?
+
+			# No need to wait for a hanging one that has reported "sbd failed"
+			# But have to wait for a hanging one in unknown state
+			if [ $unknown_hanging -eq 0 ]; then
+				if [ $cmd_rc -ne 0 ]; then
+					rc=$cmd_rc
+				fi
+
+				break
+			fi
+		done
+	done
+
+	return $rc
+}
+
 sbd_check_device() {
 	if [ -z "$sbd_device" ]; then
 		ha_log.sh err "No sbd device(s) found in the configuration."
@@ -44,7 +192,7 @@ sbd_validate_timeout() {
 	    yes|true|1|YES|TRUE|ja|on|ON) return ;;
 	esac
 	crm_timeout=$[$(crm_attribute -t crm_config -G -n stonith-timeout -d 20s -q | sed -e 's/\(.*\)s/\1/' -e 's/\(.*\)m/\1*60/')]
-	sbd_timeout=$(sbd -d $sbd_device dump | perl -ne 'if (/msgwait.*: (\d+)/) { print "$1\n"; }' | head -n 1)
+	sbd_timeout=$(sbd_cmd_get_stdout dump | perl -ne 'if (/msgwait.*: (\d+)/) { print "$1\n"; }' | head -n 1)
 	if [ -z "$sbd_timeout" -o "$sbd_timeout" = "0" ]; then
 		return
 	fi
@@ -66,7 +214,7 @@ sbd_validate_timeout() {
 case $1 in
 gethosts)
     sbd_check_device
-    echo `sbd -d $sbd_device list | cut -f2 | sort | uniq`
+    echo `sbd_cmd_get_stdout list | cut -f2 | sort | uniq`
     exit 0
     ;;
 off|reset)
@@ -76,13 +224,14 @@ off|reset)
     case "$crashdump" in
 	    yes|true|1|YES|TRUE|ja|on|ON) message="crashdump" ;;
     esac
-    sbd -d $sbd_device message $2 $message
+    exec {fd}< <(sbd -d $sbd_device message $2 $message)
+    wait $!
     exit $?
     ;;
 status)
     sbd_check_device
     sbd_validate_timeout
-    error_output=$(sbd -d $sbd_device list 2>&1 >/dev/null)
+    error_output=$(sbd_cmd_check_error list)
     if [ $? -ne 0 ]; then
     	error_message=$(echo "$error_output" | grep -v "please check the logs")
     	ha_log.sh err "sbd list failed: $error_message"
