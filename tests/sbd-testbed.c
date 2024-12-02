@@ -156,7 +156,7 @@ init (void)
 
         handle = dlopen("libaio.so",  RTLD_NOW);
         if (!handle) {
-            fprintf(stderr, "Failed opening libaio.so.1\n");
+            fprintf(stderr, "Failed opening libaio.so\n");
             exit(1);
         }
         orig_io_setup     = (orig_io_setup_f_type)dlsym_fatal(handle,"io_setup");
