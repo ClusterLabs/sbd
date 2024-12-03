@@ -97,6 +97,7 @@ Available rpmbuild rebuild options:
 Summary:        Storage-based death environment for regression tests
 License:        GPL-2.0-or-later
 Group:          System Environment/Daemons
+Requires:       libaio-devel
 
 %description tests
 This package provides an environment + testscripts for

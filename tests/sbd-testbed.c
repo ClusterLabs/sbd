@@ -135,6 +135,8 @@ dlsym_fatal(void *handle, const char *symbol)
     return rv;
 }
 
+#define LIBAIO_LIBRARY "libaio.so"
+
 static void
 init (void)
 {
@@ -154,9 +156,9 @@ init (void)
         orig_fopen        = (orig_fopen_f_type)dlsym_fatal(RTLD_NEXT,"fopen");
         orig_fclose       = (orig_fclose_f_type)dlsym_fatal(RTLD_NEXT,"fclose");
 
-        handle = dlopen("libaio.so",  RTLD_NOW);
+        handle = dlopen(LIBAIO_LIBRARY, RTLD_NOW);
         if (!handle) {
-            fprintf(stderr, "Failed opening libaio.so.1\n");
+            fprintf(stderr, "Failed opening %s: %s\n", LIBAIO_LIBRARY, dlerror());
             exit(1);
         }
         orig_io_setup     = (orig_io_setup_f_type)dlsym_fatal(handle,"io_setup");
