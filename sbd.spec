@@ -47,6 +47,14 @@
 # by setting below to an explicit 'yes' or 'no'.
 %global sync_resource_startup_sysconfig ""
 
+# Try finding and using libaio.so.x library name i.e. the one with the major
+# version number such as libaio.so.1
+%global libaio_name %(readlink -f %{_libdir}/libaio.so | xargs basename | cut -d "." -f 1-3)
+
+%if "%{libaio_name}" != "" && "%{libaio_name}" != "libaio.so"
+%global specify_libaio 1
+%endif
+
 Name:           sbd
 Summary:        Storage-based death
 License:        GPL-2.0-or-later
@@ -97,6 +105,10 @@ Available rpmbuild rebuild options:
 Summary:        Storage-based death environment for regression tests
 License:        GPL-2.0-or-later
 Group:          System Environment/Daemons
+%if ! 0%{?specify_libaio}
+# Requires libaio-devel for the generic symbolic link libaio.so
+Requires:       libaio-devel
+%endif
 
 %description tests
 This package provides an environment + testscripts for
@@ -110,6 +122,11 @@ regression-testing sbd.
 %build
 ./autogen.sh
 export CFLAGS="$RPM_OPT_FLAGS -Wall -Werror"
+
+%if 0%{?specify_libaio}
+export CFLAGS="${CFLAGS} -DLIBAIO_NAME=%{libaio_name}"
+%endif
+
 %configure --with-watchdog-timeout-default=%{watchdog_timeout_default} \
            --with-sync-resource-startup-default=%{?with_sync_resource_startup_default:yes}%{!?with_sync_resource_startup_default:no}  \
            --with-sync-resource-startup-sysconfig=%{sync_resource_startup_sysconfig} \

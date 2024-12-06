@@ -56,6 +56,17 @@ g_unix_fd_add(gint fd,
 }
 #endif
 
+#define LIBAIO_DOQUOTE(name) #name
+#define LIBAIO_QUOTE(name) LIBAIO_DOQUOTE(name)
+
+#define LIBAIO_DEFAULT LIBAIO_QUOTE(libaio.so)
+
+#ifndef LIBAIO_NAME
+  #define LIBAIO_QUOTED LIBAIO_DEFAULT
+#else
+  #define LIBAIO_QUOTED LIBAIO_QUOTE(LIBAIO_NAME)
+#endif
+
 typedef int (*orig_open_f_type)(const char *pathname, int flags, ...);
 typedef int (*orig_ioctl_f_type)(int fd, unsigned long int request, ...);
 typedef ssize_t (*orig_write_f_type)(int fd, const void *buf, size_t count);
@@ -144,6 +155,7 @@ init (void)
         const char *value;
         int i;
         char *token, *str, *str_orig;
+        const char *libaio = LIBAIO_QUOTED;
 
         is_init = 1;
 
@@ -154,9 +166,13 @@ init (void)
         orig_fopen        = (orig_fopen_f_type)dlsym_fatal(RTLD_NEXT,"fopen");
         orig_fclose       = (orig_fclose_f_type)dlsym_fatal(RTLD_NEXT,"fclose");
 
-        handle = dlopen("libaio.so",  RTLD_NOW);
+        if (libaio == NULL || libaio[0] == '\0') {
+            libaio = LIBAIO_DEFAULT;
+        }
+
+        handle = dlopen(libaio, RTLD_NOW);
         if (!handle) {
-            fprintf(stderr, "Failed opening libaio.so.1\n");
+            fprintf(stderr, "Failed opening %s (%s)\n", libaio, dlerror());
             exit(1);
         }
         orig_io_setup     = (orig_io_setup_f_type)dlsym_fatal(handle,"io_setup");
