@@ -598,11 +598,28 @@ sbd_cdtocoredir(void)
 	return rc;
 }
 
+void
+sbd_detach(void)
+{
+    const char *devnull = "/dev/null";
+
+    maximize_priority();
+    sysrq_init();
+
+    umask(022);
+    close(0);
+    (void)open(devnull, O_RDONLY);
+    close(1);
+    (void)open(devnull, O_WRONLY);
+    close(2);
+    (void)open(devnull, O_WRONLY);
+    sbd_cdtocoredir();
+}
+
 pid_t
 make_daemon(void)
 {
 	pid_t			pid;
-	const char *		devnull = "/dev/null";
 
 	pid = fork();
 	if (pid < 0) {
@@ -617,17 +634,8 @@ make_daemon(void)
         qb_log_ctl(QB_LOG_STDERR, QB_LOG_CONF_ENABLED, QB_FALSE);
 
 	/* This is the child; ensure privileges have not been lost. */
-	maximize_priority();
-	sysrq_init();
+	sbd_detach();
 
-	umask(022);
-	close(0);
-	(void)open(devnull, O_RDONLY);
-	close(1);
-	(void)open(devnull, O_WRONLY);
-	close(2);
-	(void)open(devnull, O_WRONLY);
-	sbd_cdtocoredir();
 	return 0;
 }
 
