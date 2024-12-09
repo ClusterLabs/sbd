@@ -297,9 +297,15 @@ exit_res:
 }
 
 /* stolen from corosync */
+
+#define LEGACY_CGROUP_PROC_PIDS "/sys/fs/cgroup/cpu/tasks"
+#define UNIFIED_CGROUP_PROC_PIDS "/sys/fs/cgroup/cgroup.procs"
+
 static int sbd_move_to_root_cgroup(bool enforce_root_cgroup) {
     FILE *f;
-    int res = -1;
+    int res = -1, num;
+    char *rt_rq_name = NULL;
+    const char *root_pids = LEGACY_CGROUP_PROC_PIDS;
 
     /*
      * /sys/fs/cgroup is hardcoded, because most of Linux distributions are now
@@ -308,13 +314,53 @@ static int sbd_move_to_root_cgroup(bool enforce_root_cgroup) {
      * This feature is expected to be removed as soon as systemd gets support
      * for managing RT configuration.
      */
-    f = fopen("/sys/fs/cgroup/cpu/cpu.rt_runtime_us", "rt");
-    if (f == NULL) {
-        cl_log(LOG_DEBUG, "cpu.rt_runtime_us doesn't exist -> "
+    do {
+        f = fopen("/sys/fs/cgroup/cpu/cpu.rt_runtime_us", "rt");
+        if (f) {
+            break;
+        }
+        /* CONFIG_RT_GROUP_SCHED might still be enabled with cgroup-v2
+           cgroup.procs on cgroup-toplevel tells us we have cgroup-v2
+           (handy as we already need that to be in selinux-policy)
+           and name of rt_rq(s) in /proc/sched_debug tells us that
+           CONFIG_RT_GROUP_SCHED is enabled
+           cgroup-v2 has been around for a while in the kernel and it
+           is no mutual exclusive compile-time-configuration - so
+           checking what is actually mounted to go with what is there
+        */
+        f = fopen(UNIFIED_CGROUP_PROC_PIDS, "rt");
+        if (f) {
+            fclose(f);
+            f = fopen("/proc/sched_debug", "rt");
+            if (f) {
+                while (((num = fscanf(f, "rt_rq[%*[^]]]:%m[^\n]\n",
+                                      &rt_rq_name)) != EOF) &&
+                       (rt_rq_name == NULL)) {
+                    /* consume a line */
+                    if ((num > 0) || (fscanf(f, "%*[^\n]") == EOF) ||
+                        (fscanf(f, "\n") == EOF)) {
+                        break;
+                    }
+                }
+                /* no hierarchical rt-budget distribution with
+                   cgroup-v2 so far - thus checking for budget is
+                   useless
+                 */
+                if (rt_rq_name) {
+                    free(rt_rq_name);
+                    enforce_root_cgroup = true;
+                    root_pids = UNIFIED_CGROUP_PROC_PIDS;
+                    break;
+                }
+                fclose(f);
+            }
+        }
+        cl_log(LOG_DEBUG, "cpu.rt_runtime_us doesn't exist & "
+            "/proc/sched_debug doesn't contain rt_rq[...]:/ -> "
             "system without cgroup or with disabled CONFIG_RT_GROUP_SCHED");
         res = 0;
         goto exit_res;
-    }
+    } while (0);
     fclose(f);
 
     if ((!enforce_root_cgroup) && (get_realtime_budget() > 0)) {
@@ -324,21 +370,23 @@ static int sbd_move_to_root_cgroup(bool enforce_root_cgroup) {
         goto exit_res;
     }
 
-    f = fopen("/sys/fs/cgroup/cpu/tasks", "w");
+    f = fopen(root_pids, "w");
     if (f == NULL) {
-        cl_log(LOG_WARNING, "Can't open cgroups tasks file for writing");
+        cl_log(LOG_WARNING, "Can't open %s for writing", root_pids);
 
         goto exit_res;
     }
 
     if (fprintf(f, "%jd\n", (intmax_t)getpid()) <= 0) {
-        cl_log(LOG_WARNING, "Can't write sbd pid into cgroups tasks file");
+        cl_log(LOG_WARNING, "Can't write sbd pid into %s", root_pids);
         goto close_and_exit_res;
     }
 
+    res = 0;
+
 close_and_exit_res:
     if (fclose(f) != 0) {
-        cl_log(LOG_WARNING, "Can't close cgroups tasks file");
+        cl_log(LOG_WARNING, "Can't close %s", root_pids);
         goto exit_res;
     }
 
