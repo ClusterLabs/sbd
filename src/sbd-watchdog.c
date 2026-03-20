@@ -17,8 +17,12 @@
  */
 
 #include "sbd.h"
-#ifdef __GLIBC__
+#ifdef __linux__
 #include <sys/sysmacros.h>
+#endif
+/* Musl-specific: basename is in libgen.h, and musl lacks __GLIBC__ */
+#ifndef __GLIBC__
+#include <libgen.h>
 #endif
 #include <dirent.h>
 #include <limits.h>

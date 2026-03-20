@@ -18,7 +18,7 @@
 #include <glib.h>
 #include <errno.h>
 
-#if __GLIBC_PREREQ(2,36)
+#if GLIB_CHECK_VERSION(2, 36, 0)
 #include <glib-unix.h>
 #else
 #include <glib/giochannel.h>
@@ -68,7 +68,11 @@ g_unix_fd_add(gint fd,
 #endif
 
 typedef int (*orig_open_f_type)(const char *pathname, int flags, ...);
+#ifdef __GLIBC__
 typedef int (*orig_ioctl_f_type)(int fd, unsigned long int request, ...);
+#else
+typedef int (*orig_ioctl_f_type)(int fd, int request, ...);
+#endif
 typedef ssize_t (*orig_write_f_type)(int fd, const void *buf, size_t count);
 typedef int (*orig_close_f_type)(int fd);
 typedef FILE *(*orig_fopen_f_type)(const char *pathname, const char *mode);
@@ -409,8 +413,14 @@ write(int fd, const void *buf, size_t count)
     return orig_write(fd, buf, count);
 }
 
+#ifdef __GLIBC__
 int
 ioctl(int fd, unsigned long int request, ...)
+#else
+/* This matches musl/Alpine and most other POSIX systems */
+int
+ioctl(int fd, int request, ...)
+#endif
 {
     int rv = -1;
     va_list ap;
@@ -419,7 +429,13 @@ ioctl(int fd, unsigned long int request, ...)
     init();
 
     va_start(ap, request);
-    switch (request) {
+    switch (
+#ifdef __GLIBC__
+        request
+#else
+        (unsigned int)request
+#endif
+        ) {
         case BLKSSZGET:
             for (i=0; i < 3; i++) {
                 if (sbd_device_fd[i] == fd) {
@@ -458,7 +474,15 @@ ioctl(int fd, unsigned long int request, ...)
             rv = orig_ioctl(fd, request, va_arg(ap, struct watchdog_info *));
             break;
         default:
-            fprintf(log_fp, "ioctl using unknown request = 0x%08lx", request);
+            fprintf(log_fp, "ioctl using unknown request = "
+#ifdef __GLIBC__
+                "0x%08lx",
+                request
+#else
+                "0x%08x",
+                (unsigned int)request
+#endif
+                );
             rv = orig_ioctl(fd, request, va_arg(ap, void *));
     }
     va_end(ap);
