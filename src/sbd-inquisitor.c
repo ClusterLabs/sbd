@@ -401,17 +401,19 @@ sbd_lock_pidfile(const char *filename)
 
 	switch (link(tf_name, lf_name)) {
 	case 0:
-		if (stat(tf_name, &sbuf) < 0) {
+		fd = open(tf_name, O_RDONLY);
+		if (fd < 0 || fstat(fd, &sbuf) < 0) {
 			/* something weird happened */
 			rc = -3;
-			break;
-		}
-		if (sbuf.st_nlink < 2) {
+		} else if (sbuf.st_nlink < 2) {
 			/* somehow, it didn't get through - NFS trouble? */
 			rc = -2;
-			break;
+		} else {
+			rc = 0;
 		}
-		rc = 0;
+		if (fd >= 0) {
+			close(fd);
+		}
 		break;
 	case EEXIST:
 		rc = -1;
@@ -779,8 +781,6 @@ void inquisitor_child(void)
 			}
 		}
 	}
-	/* not reached */
-	exit(0);
 }
 
 int inquisitor(void)

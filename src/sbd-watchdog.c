@@ -303,6 +303,8 @@ watchdog_populate_list(void)
                     memmove(&buf[sizeof(WATCHDOG_NODEDIR)-1], buf, len+1);
                     memcpy(buf, WATCHDOG_NODEDIR, sizeof(WATCHDOG_NODEDIR)-1);
                     len += sizeof(WATCHDOG_NODEDIR)-1;
+                    /* redundant due to memmove above - make coverity happy */
+                    buf[len] = '\0';
                 }
                 if (strstr(buf, "/../") ||
                     strncmp(WATCHDOG_NODEDIR, buf,

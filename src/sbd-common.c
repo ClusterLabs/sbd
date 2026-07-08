@@ -252,6 +252,7 @@ static int get_realtime_budget(void)
                          &namespecs, &cgroup)) !=EOF ) {
         if (namespecs && strstr(namespecs, "cpuacct")) {
             free(namespecs);
+            namespecs = NULL;
             break;
         }
         if (cgroup) {
@@ -292,6 +293,9 @@ static int get_realtime_budget(void)
 exit_res:
     if (cgroup) {
         free(cgroup);
+    }
+    if (namespecs) {
+        free(namespecs);
     }
     return res;
 }
