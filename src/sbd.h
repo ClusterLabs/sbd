@@ -62,6 +62,9 @@
 /* exit status for pcmk-servant */
 #define EXIT_PCMK_SERVANT_GRACEFUL_SHUTDOWN 30
 
+/* exit status for cluster-servant */
+#define EXIT_CLUSTER_DISCONNECT 40
+
 #define HOG_CHAR	0xff
 #define SECTOR_NAME_MAX 63
 
