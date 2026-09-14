@@ -441,9 +441,10 @@ notify_timer_cb(gpointer data)
                 struct votequorum_info info;
 
                 if (votequorum_getinfo(votequorum_handle, 0, &info) != CS_OK) {
+                    votequorum_callbacks_t votequorum_callbacks = {0};
 
                     votequorum_finalize(votequorum_handle);
-                    if (votequorum_initialize(&votequorum_handle, NULL) != CS_OK) {
+                    if (votequorum_initialize(&votequorum_handle, &votequorum_callbacks) != CS_OK) {
                         votequorum_handle = 0;
                         break;
                     }
