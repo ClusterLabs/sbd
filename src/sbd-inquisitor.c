@@ -1382,7 +1382,14 @@ int main(int argc, char **argv, char **envp)
 
                 cl_log(LOG_NOTICE, "%s flush + write \'%c\' to sysrq in case of timeout",
                        do_flush?"Do":"Skip", timeout_sysrq_char);
-                exit_status = inquisitor();
+                if (pidfile) {
+                    exit_status = inquisitor();
+                } else {
+                    sbd_detach();
+                    inquisitor_child();
+                    /* not reached */
+                    exit(0);
+                }
         } else {
             exit_status = -2;
         }

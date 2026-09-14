@@ -136,6 +136,7 @@ void do_reset(void);
 void do_off(void);
 void do_timeout_action(void);
 pid_t make_daemon(void);
+void sbd_detach(void);
 void maximize_priority(void);
 void sbd_get_uname(void);
 void sbd_set_format_string(int method, const char *daemon);
