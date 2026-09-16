@@ -260,6 +260,42 @@ static struct watchdog_list_item *watchdog_list = NULL;
 static int watchdog_list_items = 0;
 
 static void
+watchdog_sysfs_ident(dev_t dev, char *ident, size_t ident_len)
+{
+    /* /sys/dev/char/$major:$minor is a direct symlink keyed by the
+     * device's major:minor, so we can look up the identity without
+     * having to opendir()/readdir() the whole /sys/class/watchdog
+     * directory (which may be denied by SELinux policy for confined
+     * daemons, while a direct known-path lookup like this one is
+     * ordinarily still allowed).
+     *
+     * Note: this doesn't cover the legacy /dev/watchdog node (major 10,
+     * minor 130), which has no /sys/dev/char/10:130 entry.
+     */
+    char entry_name[sizeof(SYS_CHAR_DEV_DIR)+20];
+    FILE *file;
+
+    if ((ident == NULL) || (ident_len == 0)) {
+        return;
+    }
+    ident[0] = '\0';
+
+    snprintf(entry_name, sizeof(entry_name),
+             SYS_CHAR_DEV_DIR "/%d:%d/identity",
+             major(dev), minor(dev));
+
+    file = fopen(entry_name, "r");
+    if (file == NULL) {
+        return;
+    }
+
+    if (fgets(ident, ident_len, file)) {
+        ident[strcspn(ident, "\n")] = '\0';
+    }
+    fclose(file);
+}
+
+static void
 watchdog_populate_list(void)
 {
     struct dirent *entry;
@@ -365,11 +401,19 @@ watchdog_populate_list(void)
 
                     wdfd = watchdog_init_fd(entry_name, -1);
                     if (wdfd >= 0) {
-                        struct watchdog_info ident;
+                        struct watchdog_info ident = { 0 };
 
-                        ident.identity[0] = '\0';
                         ioctl(wdfd, WDIOC_GETSUPPORT, &ident);
                         watchdog_close_fd(wdfd, entry_name, true);
+                        if (ident.identity[0]) {
+                            wdg->dev_ident = strdup((char *) ident.identity);
+                        }
+                    }
+                    if (wdg->dev_ident == NULL) {
+                        struct watchdog_info ident = { 0 };
+
+                        watchdog_sysfs_ident(wdg->dev, (char *) ident.identity,
+                                             sizeof(ident.identity));
                         if (ident.identity[0]) {
                             wdg->dev_ident = strdup((char *) ident.identity);
                         }
