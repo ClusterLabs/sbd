@@ -29,6 +29,8 @@
 #define MBOX_TO_SECTOR(mbox) (2+mbox*2)
 
 extern int disk_count;
+extern int servant_synchronous;
+extern GMainLoop *mainloop;
 
 /* These have to match the values in the header of the partition */
 static char		sbd_magic[8] = "SBD_SBD_";
@@ -949,33 +951,86 @@ get_first_msgwait(struct servants_list_item *servants)
     return msgwait;
 }
 
-int dump_headers(struct servants_list_item *servants)
+int header_dump_wrapper(const char *devname, int mode, const void *argp)
 {
-	int rc = 0;
-	struct servants_list_item *s = servants;
-	struct sbd_context *st;
+    int rc = 0;
+    struct sbd_context *st = NULL;
 
-	for (s = servants; s; s = s->next) {
-		int rv;
+    fprintf(stdout, "==Dumping header on disk %s\n", devname);
 
-		fprintf(stdout, "==Dumping header on disk %s\n", s->devname);
-		st = open_device(s->devname, LOG_WARNING);
-		if (st) {
-			rv = header_dump(st);
-			close_device(st);
-		} else {
-			fprintf(stderr, "== disk %s unreadable!\n", s->devname);
-			rv = -1;
-		}
+    st = open_device(devname, LOG_WARNING);
+    if (st) {
+        rc = header_dump(st);
+        close_device(st);
 
-		if (rv == -1) {
-			rc = -1;
-			fprintf(stderr, "==Header on disk %s NOT dumped\n", s->devname);
-		} else {
-			fprintf(stdout, "==Header on disk %s is dumped\n", s->devname);
-		}
-	}
-	return rc;
+    } else {
+        fprintf(stderr, "== disk %s unreadable!\n", devname);
+        rc = -1;
+    }
+
+    if (rc == -1) {
+        fprintf(stderr, "==Header on disk %s NOT dumped\n", devname);
+
+    } else {
+        fprintf(stdout, "==Header on disk %s is dumped\n", devname);
+    }
+
+    return rc;
+}
+
+int
+query_devices(struct servants_list_item *servants, const char *command)
+{
+    struct servants_list_item *s = NULL;
+    functionp_t functionp = NULL;
+    int rc = 0;
+
+    if (strcmp(command, "dump") == 0) {
+        functionp = &header_dump_wrapper;
+
+    } else {
+        cl_log(LOG_DEBUG, "Unexpected command '%s'", command);
+        return -1;
+    }
+
+    if (!servant_synchronous) {
+        mainloop = g_main_loop_new(NULL, FALSE);
+    }
+
+    for (s = servants; s; s = s->next) {
+        int rv = 0;
+
+        if (!sbd_is_disk(s)){
+            continue;
+        }
+
+        s->command = command;
+        s->synchronous = servant_synchronous;
+        s->timeout = timeout_io * 1000;
+
+        rv = assign_servant_with_pipes(s, functionp, 0, NULL);
+        if (rv != 0) {
+            rc = -1;
+        }
+    }
+
+    if (!servant_synchronous && mainloop) {
+        g_main_loop_run(mainloop);
+        g_main_loop_unref(mainloop);
+        mainloop = NULL;
+    }
+
+    if (rc != 0) {
+        return -1;
+    }
+
+    for (s = servants; s; s = s->next) {
+        if (s->rc != 0) {
+            return -1;
+        }
+    }
+
+    return rc;
 }
 
 void open_any_device(struct servants_list_item *servants)
