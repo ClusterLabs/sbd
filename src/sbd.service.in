@@ -9,11 +9,16 @@ RefuseManualStop=true
 RefuseManualStart=true
 
 [Service]
-Type=forking
-PIDFile=@runstatedir@/sbd.pid
+Type=simple
+# sbd-inquisitor will usually have opened a watchdog-device
+# thus we should give it a chance to do what
+# it needs to (anyway kills the subprocesses the
+# hard way) and close that gracefully.
+# If that isn't successful within time let mixed
+# do a cleanup although that will most likely lead to suicide.
+KillMode=mixed
 EnvironmentFile=-@CONFIGDIR@/sbd
-ExecStart=@sbindir@/sbd $SBD_OPTS -p @runstatedir@/sbd.pid watch
-ExecStop=@bindir@/kill -TERM $MAINPID
+ExecStart=@sbindir@/sbd $SBD_OPTS watch
 
 # Could this benefit from exit codes for restart?
 # Does this need to be set to msgwait * 1.2?
