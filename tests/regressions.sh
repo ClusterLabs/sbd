@@ -30,14 +30,24 @@
 : ${SBD_BINARY:="/usr/sbin/sbd"}
 : ${SBD_PRELOAD:="libsbdtestbed.so"}
 : ${SBD_USE_DM:="yes"}
-: ${SBD_TRANSLATE_AIO:= "no"}
+: ${SBD_TRANSLATE_AIO:="no"}
+: ${SBD_DATESTRING:="%M:%S.%N "}
+: ${SBD_MOUNTHUGETLBFS:="yes"}
 
 sbd() {
-	LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${SBD_DEVICE}" SBD_PRELOAD_LOG=${SBD_PRELOAD_LOG} SBD_WATCHDOG_DEV=/dev/watchdog setsid ${SBD_BINARY} -p ${SBD_PIDFILE} "$@"
+	LD_PRELOAD=${SBD_PRELOAD} SBD_HUGETLBFS=${SBD_HUGETLBFS} SBD_DEVICE="${SBD_DEVICE}" SBD_PRELOAD_LOG=${SBD_PRELOAD_LOG} SBD_WATCHDOG_DEV=/dev/watchdog setsid ${SBD_BINARY} -p ${SBD_PIDFILE} "$@"
 }
 
 sbd_wipe_disk() {
-	dd if=/dev/zero of=$1 count=2048 2>/dev/null
+	if [[ "${SBD_HUGETLBFS}" == "" ]]; then
+		dd if=/dev/zero of=$1 count=2048 2>/dev/null
+	else
+		if [[ -f $1 && -s $1 ]]; then
+			fallocate -p -o 0 -l 2M $1
+		else
+			fallocate -l 2M $1
+		fi
+	fi
 }
 
 sbd_setup() {
@@ -47,10 +57,42 @@ sbd_setup() {
 	trap 'sbd_teardown 143' TERM
 	trap 'sbd_teardown 130' INT
 	trap "sbd_teardown 1" ERR
-	if [[ -d /dev/shm ]]; then
-		SBD_IMGPATH=/dev/shm
-	else
-		SBD_IMGPATH=/tmp
+	if [[ "${SBD_MOUNTHUGETLBFS}" == "yes" ]]; then
+		SBD_HUGETLBFS=$(mktemp -d /tmp/sbd.hugetlbfs.XXXXXX)
+		if mount -t hugetlbfs hugetlbfs ${SBD_HUGETLBFS}; then
+			SBD_IMGPATH=${SBD_HUGETLBFS}
+			# hugetlb-size = 2M - so enough for 3 image-files
+			total=0
+			free=0
+			rsvd=0
+			size=0
+			while read -r key val _; do
+				case "$key" in
+					HugePages_Total:) total=$val ;;
+					HugePages_Free:)  free=$val ;;
+					HugePages_Rsvd:)  rsvd=$val ;;
+					Hugepagesize:)    size=$val ;;
+				esac
+			done < /proc/meminfo
+			available=$(( $free - $rsvd ))
+			required=$(( 3 * 2048 / $size))
+			echo "available = $available, total = $total, free = $free, rsvd = $rsvd size = $size required = $required";
+			if [[ $available -lt $required ]]; then
+				needed=$(( $required - $available ))
+				echo $(( $total + $needed )) > /proc/sys/vm/nr_hugepages
+			fi
+			echo "nr_hugepages = $(cat /proc/sys/vm/nr_hugepages)"
+		else
+			rm -rf ${SBD_HUGETLBFS}
+			SBD_HUGETLBFS=""
+		fi
+	fi
+	if [[ "${SBD_IMGPATH}" == "" ]]; then
+		if [[ -d /dev/shm ]]; then
+			SBD_IMGPATH=/dev/shm
+		else
+			SBD_IMGPATH=/tmp
+		fi
 	fi
 	for N in $(seq 3) ; do
 		F[$N]=$(mktemp ${SBD_IMGPATH}/sbd.device.$N.XXXXXX)
@@ -89,6 +131,10 @@ sbd_teardown() {
 		rm -f ${SBD_PIDFILE}
 		rm -f ${SBD_PRELOAD_LOG}
 	done
+	if [[ "${SBD_HUGETLBFS}" != "" ]]; then
+		umount ${SBD_HUGETLBFS}
+		rm -rf ${SBD_HUGETLBFS}
+	fi
 	# now that everything should be clean
 	# return to original handlers to terminate
 	# as requested
@@ -141,22 +187,26 @@ sbd_daemon_cleanup() {
 	fi
 }
 
+_log() {
+	date "+${SBD_DATESTRING}$*"
+}
+
 _ok() {
-	echo "-- $*"
+	_log "-- $*"
 	"$@"
 	rc=$?
 	if [ $rc -ne 0 ]; then
-		echo "$* failed with $rc"
+		_log "$* failed with $rc"
 		exit $rc
 	fi
 }
 
 _no() {
-	echo "-- $*"
+	_log "-- $*"
 	"$@"
 	rc=$?
 	if [ $rc -eq 0 ]; then
-		echo "$* did NOT fail ($rc)"
+		_log "$* did NOT fail ($rc)"
 		exit $rc
 	fi
 	return 0
@@ -165,7 +215,7 @@ _no() {
 _in_log() {
 	grep "$@" ${SBD_PRELOAD_LOG} >/dev/null
 	if [ $? -ne 0 ]; then
-		echo "didn't find '$*' in log:"
+		_log "didn't find '$*' in log:"
 		cat ${SBD_PRELOAD_LOG}
 		sbd_daemon_cleanup
 		exit 1
@@ -173,13 +223,13 @@ _in_log() {
 }
 
 test_1() {
-	echo "Creating three devices"
+	_log "Creating three devices"
 	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} create
 	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} dump
 }
 
 test_2() {
-	echo "Basic functionality"
+	_log "Basic functionality"
 	for S in `seq 2` ; do
 		_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} allocate "test-$S"
 	done
@@ -188,12 +238,12 @@ test_2() {
 }
 
 test_3() {
-	echo "Start mode (expected not to start, because reset was written in test_2)"
+	_log "Start mode (expected not to start, because reset was written in test_2)"
 	_no sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -n test-2 -Z -Z -Z -S 1 watch
 }
 
 test_4() {
-	echo "Deliver message with 1 failure"
+	_log "Deliver message with 1 failure"
 	sbd_dev_fail 1
 	_no sbd -d ${D[1]} -n test-1 message test-2 exit
 	_no sbd -d ${D[1]} -d ${D[2]} -n test-1 message test-2 exit
@@ -203,7 +253,7 @@ test_4() {
 }
 
 test_5() {
-	echo "Deliver message with 2 failures"
+	_log "Deliver message with 2 failures"
 	sbd_dev_fail 1
 	sbd_dev_fail 2
 	_no sbd -d ${D[1]} -d ${D[2]} -n test-1 message test-2 exit
@@ -214,7 +264,7 @@ test_5() {
 }
 
 test_6() {
-	echo "Deliver message with 3 failures"
+	_log "Deliver message with 3 failures"
 	sbd_dev_fail 1
 	sbd_dev_fail 2
 	sbd_dev_fail 3
@@ -225,17 +275,17 @@ test_6() {
 }
 
 test_101() {
-	echo "Creating one device"
+	_log "Creating one device"
 	_ok sbd -d ${D[1]} create
 }
 
 test_102() {
-	echo "Creating two devices"
+	_log "Creating two devices"
 	_ok sbd -d ${D[1]} -d ${D[2]} create
 }
 
 test_7() {
-	echo "Allocate all slots plus 1"
+	_log "Allocate all slots plus 1"
 	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -2 0 create
 	for S in `seq 255` ; do
 		_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} allocate "test-$S"
@@ -244,25 +294,25 @@ test_7() {
 }
 
 test_8() {
-	echo "Non-existent device path"
+	_log "Non-existent device path"
 	_no sbd -d /dev/kfdifdifdfdlfd -create 2>/dev/null
 }
 
 test_9() {
-	echo "Basic sbd invocation"
+	_log "Basic sbd invocation"
 	_no sbd
 	_ok sbd -h
 }
 
 test_watchdog() {
-	echo "Basic watchdog test"
+	_log "Basic watchdog test"
 	echo > ${SBD_PRELOAD_LOG}
 	sbd test-watchdog < /dev/null
 	_in_log "watchdog fired"
 }
 
 test_stall_inquisitor() {
-	echo "Stall inquisitor test"
+	_log "Stall inquisitor test"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -n test-1 watch
 	sleep 10
@@ -274,7 +324,7 @@ test_stall_inquisitor() {
 }
 
 test_wipe_slots1() {
-	echo "Wipe slots test (with watchdog)"
+	_log "Wipe slots test (with watchdog)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} -n test-1 watch
 	sleep 2
@@ -284,7 +334,7 @@ test_wipe_slots1() {
 }
 
 test_wipe_slots2() {
-	echo "Wipe slots test (without watchdog)"
+	_log "Wipe slots test (without watchdog)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	sbd -d ${D[1]} -w /dev/null -n test-1 watch
@@ -296,7 +346,7 @@ test_wipe_slots2() {
 }
 
 test_message1() {
-	echo "Message test (reset)"
+	_log "Message test (reset)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	sbd -d ${D[1]} -w /dev/null -n test-1 watch
@@ -308,7 +358,7 @@ test_message1() {
 }
 
 test_message2() {
-	echo "Message test (off)"
+	_log "Message test (off)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	sbd -d ${D[1]} -w /dev/null -n test-1 watch
@@ -320,7 +370,7 @@ test_message2() {
 }
 
 test_message3() {
-	echo "Message test (crashdump)"
+	_log "Message test (crashdump)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	sbd -d ${D[1]} -w /dev/null -n test-1 watch
@@ -331,7 +381,7 @@ test_message3() {
 }
 
 test_timeout_action1() {
-	echo "Timeout action test (off)"
+	_log "Timeout action test (off)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	SBD_TIMEOUT_ACTION=off sbd -d ${D[1]} -w /dev/null -n test-1 watch
@@ -343,7 +393,7 @@ test_timeout_action1() {
 }
 
 test_timeout_action2() {
-	echo "Timeout action test (crashdump)"
+	_log "Timeout action test (crashdump)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	SBD_TIMEOUT_ACTION=crashdump sbd -d ${D[1]} -w /dev/null -n test-1 watch
@@ -356,12 +406,12 @@ test_timeout_action2() {
 echo "SBD_BINARY = \"${SBD_BINARY}\""
 echo "SBD_PRELOAD = \"${SBD_PRELOAD}\""
 echo "SBD_USE_DM = \"${SBD_USE_DM}\""
-echo "SBD_TRANSLATE_AIO = \"${SBD_TRANSLATE_AIO}"\"
+echo "SBD_TRANSLATE_AIO = \"${SBD_TRANSLATE_AIO}\""
+echo "SBD_DATESTRING = \"${SBD_DATESTRING}\""
+echo "SBD_MOUNTHUGETLBFS = \"${SBD_MOUNTHUGETLBFS}\""
 
 sbd_setup
 
-_ok test "${WATCHDOG_TIMEOUT}" -eq "${WATCHDOG_TIMEOUT}"
-_ok test "${MSGWAIT_TIMEOUT}" -eq "${MSGWAIT_TIMEOUT}"
 echo "running sbd-tests with WATCHDOG_TIMEOUT=${WATCHDOG_TIMEOUT}s MSGWAIT_TIMEOUT=${MSGWAIT_TIMEOUT}s"
 
 if [[ "${SBD_PRELOAD}" != "" ]]; then
@@ -370,10 +420,12 @@ fi
 
 for T in 101 102 $(seq 9) ${SBD_DAEMON_TESTS}; do
 	if ! test_$T ; then
-		echo "FAILURE: Test $T"
+		# actually tests should exit on failure
+		# just for the case one should come back
+		_log "FAILURE: Test $T"
 		break
 	fi
-	echo "SUCCESS: Test $T"
+	_log "SUCCESS: Test $T"
 done
 
 echo "SUCCESS: All tests completed"

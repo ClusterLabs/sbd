@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/reboot.h>
 #include <stdarg.h>
@@ -125,6 +126,7 @@ static struct iocb *pending_iocb = NULL;
 struct io_context { int context_num; };
 static struct io_context our_io_context = {.context_num = 1};
 static int translate_aio = 0;
+static int translate_pwrite2mmap = 0;
 
 static GMainLoop *mainloop = NULL;
 
@@ -219,6 +221,12 @@ init (void)
         value = getenv("SBD_TRANSLATE_AIO");
         if ((value) && !strcmp(value, "yes")) {
             translate_aio = 1;
+        }
+
+        value = getenv("SBD_HUGETLBFS");
+        if ((value) && (strlen(value) > 0)) {
+            translate_aio = 1;
+            translate_pwrite2mmap = 1;
         }
     }
 }
@@ -713,6 +721,44 @@ int io_submit(io_context_t ctx_id, long nr, struct iocb *ios[])
     return nr;
 }
 
+static ssize_t pwrite2mmap(int fd, const void *buf, size_t count, off_t offset)
+{
+    if (offset < 0 || count == 0 || buf == NULL) {
+        if (count == 0) return 0;
+        errno = (offset < 0) ? EINVAL : EFAULT;
+        return -1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        return -1;
+    }
+
+    if (offset >= st.st_size) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if (offset + (off_t)count > st.st_size) {
+        count = (size_t)(st.st_size - offset);
+    }
+
+    /* Offset 0 is always page-aligned, and st.st_size is already hugepage-aligned */
+    void *addr = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED) {
+        return -1;
+    }
+
+    memcpy((char *)addr + offset, buf, count);
+
+    int saved_errno = errno;
+    if (munmap(addr, st.st_size) != 0) {
+        return -1;
+    }
+    errno = saved_errno;
+
+    return (ssize_t)count;
+}
+
 int io_getevents(io_context_t ctx_id, long min_nr, long nr,
                         struct io_event *events, struct timespec *timeout)
 {
@@ -731,22 +777,33 @@ int io_getevents(io_context_t ctx_id, long min_nr, long nr,
         return 0;
     }
 
-	switch (pending_iocb->aio_lio_opcode) {
-		case IO_CMD_PWRITE:
-			events->res = pwrite(pending_iocb->aio_fildes,
-								pending_iocb->u.c.buf,
-								pending_iocb->u.c.nbytes,
-								pending_iocb->u.c.offset);
-			break;
-		case IO_CMD_PREAD:
-			events->res = pread(pending_iocb->aio_fildes,
-								pending_iocb->u.c.buf,
-								pending_iocb->u.c.nbytes,
-								pending_iocb->u.c.offset);
-			break;
-		default:
-			events->res = 0;
-	}
+    switch (pending_iocb->aio_lio_opcode)
+    {
+    case IO_CMD_PWRITE:
+        if (!translate_pwrite2mmap)
+        {
+            events->res = pwrite(pending_iocb->aio_fildes,
+                                 pending_iocb->u.c.buf,
+                                 pending_iocb->u.c.nbytes,
+                                 pending_iocb->u.c.offset);
+        }
+        else
+        {
+            events->res = pwrite2mmap(pending_iocb->aio_fildes,
+                                      pending_iocb->u.c.buf,
+                                      pending_iocb->u.c.nbytes,
+                                      pending_iocb->u.c.offset);
+        }
+        break;
+    case IO_CMD_PREAD:
+        events->res = pread(pending_iocb->aio_fildes,
+                            pending_iocb->u.c.buf,
+                            pending_iocb->u.c.nbytes,
+                            pending_iocb->u.c.offset);
+        break;
+    default:
+        events->res = 0;
+    }
 
     events->data = pending_iocb->data;
     events->obj  = pending_iocb;
