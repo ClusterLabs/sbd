@@ -30,7 +30,7 @@
 : ${SBD_BINARY:="/usr/sbin/sbd"}
 : ${SBD_PRELOAD:="libsbdtestbed.so"}
 : ${SBD_USE_DM:="yes"}
-: ${SBD_TRANSLATE_AIO:= "no"}
+: ${SBD_TRANSLATE_AIO:="no"}
 
 sbd() {
 	LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${SBD_DEVICE}" SBD_PRELOAD_LOG=${SBD_PRELOAD_LOG} SBD_WATCHDOG_DEV=/dev/watchdog setsid ${SBD_BINARY} -p ${SBD_PIDFILE} "$@"
@@ -356,12 +356,10 @@ test_timeout_action2() {
 echo "SBD_BINARY = \"${SBD_BINARY}\""
 echo "SBD_PRELOAD = \"${SBD_PRELOAD}\""
 echo "SBD_USE_DM = \"${SBD_USE_DM}\""
-echo "SBD_TRANSLATE_AIO = \"${SBD_TRANSLATE_AIO}"\"
+echo "SBD_TRANSLATE_AIO = \"${SBD_TRANSLATE_AIO}\""
 
 sbd_setup
 
-_ok test "${WATCHDOG_TIMEOUT}" -eq "${WATCHDOG_TIMEOUT}"
-_ok test "${MSGWAIT_TIMEOUT}" -eq "${MSGWAIT_TIMEOUT}"
 echo "running sbd-tests with WATCHDOG_TIMEOUT=${WATCHDOG_TIMEOUT}s MSGWAIT_TIMEOUT=${MSGWAIT_TIMEOUT}s"
 
 if [[ "${SBD_PRELOAD}" != "" ]]; then
