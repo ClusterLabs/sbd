@@ -36,6 +36,7 @@
 # where it is called sbd_sync - assure by e.g.
 # mutual rpm dependencies.
 %bcond_without sync_resource_startup_default
+%bcond_with check
 # Syncing enabled per default will lead to
 # syncing enabled on upgrade without adaption
 # of the config.
@@ -84,6 +85,10 @@ BuildRequires:  libuuid-devel
 BuildRequires:  libxml2-devel
 BuildRequires:  pkgconfig
 BuildRequires:  make
+%if %{with check}
+# pkill used by the regression-tests
+BuildRequires:  psmisc
+%endif
 Conflicts:      fence-agents-sbd < 4.5.0
 
 %if 0%{?rhel} > 0
@@ -133,6 +138,14 @@ export CFLAGS="${CFLAGS} -DLIBAIO_NAME=%{libaio_name}"
            --with-runstatedir=%{_rundir}
 make %{?_smp_mflags}
 ###########################################################
+
+%check
+# enable with rpmbuild --with check: runs the regression-tests from
+# tests/regressions.sh on image-files under /dev/shm (no
+# device-mapper, no root-privileges needed)
+%if %{with check}
+make check
+%endif
 
 %install
 ###########################################################
