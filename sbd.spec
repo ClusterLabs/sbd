@@ -142,7 +142,9 @@ make %{?_smp_mflags}
 %check
 # enable with rpmbuild --with check: runs the regression-tests from
 # tests/regressions.sh on image-files under /dev/shm (no
-# device-mapper, no root-privileges needed)
+# device-mapper, no root-privileges needed); if mlock isn't permitted
+# for the build-user the images may swap out and timing-sensitive
+# tests may get flaky - the testbed warns then
 %if %{with check}
 make check
 %endif

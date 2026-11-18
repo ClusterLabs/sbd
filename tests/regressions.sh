@@ -44,7 +44,10 @@ sbd() {
 }
 
 sbd_wipe_disk() {
-	dd if=/dev/zero of=$1 count=2048 2>/dev/null
+	# conv=notrunc so that we zero out the very pages the testbed keeps
+	# mlocked while the daemon holds the device-image open - a truncating
+	# wipe would drop the pages and re-allocate them without the lock
+	dd if=/dev/zero of=$1 count=2048 conv=notrunc 2>/dev/null
 }
 
 sbd_setup() {
