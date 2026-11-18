@@ -186,6 +186,25 @@ _in_log() {
 	fi
 }
 
+_wait_in_log() {
+	# wait up to $1 seconds for $2... to show up in the testbed-log -
+	# the servants poll the device-images only about once a second, so
+	# a fixed interval before checking is a race under load
+	local timeout=$1
+	local deadline=$(( $(date +%s) + ${timeout} ))
+	shift
+
+	while ! grep "$@" ${SBD_PRELOAD_LOG} >/dev/null 2>&1; do
+		if [[ $(date +%s) -ge ${deadline} ]]; then
+			_log "didn't find '$*' in log within ${timeout}s:"
+			cat ${SBD_PRELOAD_LOG}
+			sbd_daemon_cleanup
+			exit 1
+		fi
+		sleep 0.5
+	done
+}
+
 test_1() {
 	_log "Creating three devices"
 	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} create
@@ -278,8 +297,9 @@ test_watchdog() {
 test_stall_inquisitor() {
 	_log "Stall inquisitor test"
 	sbd_daemon_cleanup
-	sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -n test-1 watch
-	sleep 10
+	# 'sbd watch' only returns successfully once the servants are up,
+	# have completed a first cycle and the watchdog is armed
+	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -n test-1 watch
 	_ok kill -0 "$(cat ${SBD_PIDFILE})"
 	kill -STOP "$(cat ${SBD_PIDFILE})"
 	sleep $((${WATCHDOG_TIMEOUT} * 2))
@@ -290,8 +310,7 @@ test_stall_inquisitor() {
 test_wipe_slots1() {
 	_log "Wipe slots test (with watchdog)"
 	sbd_daemon_cleanup
-	sbd -d ${D[1]} -n test-1 watch
-	sleep 2
+	_ok sbd -d ${D[1]} -n test-1 watch
 	sbd_wipe_disk ${D[1]}
 	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "watchdog fired"
@@ -301,8 +320,7 @@ test_wipe_slots2() {
 	_log "Wipe slots test (without watchdog)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
-	sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
 	sbd_wipe_disk ${D[1]}
 	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('b')"
@@ -313,11 +331,9 @@ test_message1() {
 	_log "Message test (reset)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
-	sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
 	sbd -d ${D[1]} message test-1 reset
-	sleep 2
-	_in_log "sysrq-trigger ('b')"
+	_wait_in_log 5 "sysrq-trigger ('b')"
 	_in_log "reboot (reboot)"
 }
 
@@ -325,11 +341,9 @@ test_message2() {
 	_log "Message test (off)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
-	sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
 	sbd -d ${D[1]} message test-1 off
-	sleep 2
-	_in_log "sysrq-trigger ('o')"
+	_wait_in_log 5 "sysrq-trigger ('o')"
 	_in_log "reboot (poweroff)"
 }
 
@@ -337,19 +351,16 @@ test_message3() {
 	_log "Message test (crashdump)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
-	sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
 	sbd -d ${D[1]} message test-1 crashdump
-	sleep 2
-	_in_log "sysrq-trigger ('c')"
+	_wait_in_log 5 "sysrq-trigger ('c')"
 }
 
 test_timeout_action1() {
 	_log "Timeout action test (off)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
-	SBD_TIMEOUT_ACTION=off sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	SBD_TIMEOUT_ACTION=off _ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
 	sbd_wipe_disk ${D[1]}
 	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('o')"
@@ -360,8 +371,7 @@ test_timeout_action2() {
 	_log "Timeout action test (crashdump)"
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
-	SBD_TIMEOUT_ACTION=crashdump sbd -d ${D[1]} -w /dev/null -n test-1 watch
-	sleep 2
+	SBD_TIMEOUT_ACTION=crashdump _ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
 	sbd_wipe_disk ${D[1]}
 	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('c')"
