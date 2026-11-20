@@ -37,6 +37,9 @@ char timeout_sysrq_char = 'b';
 bool move_to_root_cgroup = true;
 bool enforce_moving_to_root_cgroup = false;
 bool sync_resource_startup = false;
+int servant_synchronous = 1;
+GMainLoop *mainloop = NULL;
+int active_servant_count = 0;
 
 int parse_device_line(const char *line);
 
@@ -162,6 +165,663 @@ int assign_servant(const char* devname, functionp_t functionp, int mode, const v
 		cl_log(LOG_ERR,"Failed to fork servant");
 		exit(1);
 	}
+}
+
+/*!
+ * \internal
+ * \brief Set a file descriptor to non-blocking
+ *
+ * \param[in] fd  File descriptor to use
+ *
+ * \return Standard Pacemaker return code
+ */
+int
+sbd__set_nonblocking(int fd)
+{
+    int flag = fcntl(fd, F_GETFL);
+
+    if (flag < 0) {
+        return errno;
+    }
+    if (fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0) {
+        return errno;
+    }
+    return pcmk_rc_ok;
+}
+
+/*!
+ * \internal
+ * \brief Close the two file descriptors of a pipe
+ *
+ * \param[in] fildes  Array of file descriptors opened by pipe()
+ */
+static void
+close_pipe(int fildes[])
+{
+    if (fildes[0] >= 0) {
+        close(fildes[0]);
+        fildes[0] = -1;
+    }
+    if (fildes[1] >= 0) {
+        close(fildes[1]);
+        fildes[1] = -1;
+    }
+}
+
+// Self-pipe implementation (see above for function descriptions)
+
+struct sigchld_data_s {
+    int pipe_fd[2];             // Pipe file descriptors
+    struct sigaction sa;        // Signal handling info (with SIGCHLD)
+    struct sigaction old_sa;    // Previous signal handling info
+};
+
+// We need a global to use in the signal handler
+volatile struct sigchld_data_s *last_sigchld_data = NULL;
+
+static void
+sigchld_handler(void)
+{
+    // We received a SIGCHLD, so trigger pipe polling
+    if ((last_sigchld_data != NULL)
+        && (last_sigchld_data->pipe_fd[1] >= 0)
+        && (write(last_sigchld_data->pipe_fd[1], "", 1) == -1)) {
+        cl_log(LOG_INFO, "Wait for child process completion failed: %s "
+               CRM_XS " source=write", pcmk_rc_str(errno));
+    }
+}
+
+static bool
+sigchld_setup(struct sigchld_data_s *data)
+{
+    int rc;
+
+    data->pipe_fd[0] = data->pipe_fd[1] = -1;
+
+    if (pipe(data->pipe_fd) == -1) {
+        cl_log(LOG_INFO, "Wait for child process completion failed: %s "
+               CRM_XS " source=pipe", pcmk_rc_str(errno));
+        return false;
+    }
+
+    rc = sbd__set_nonblocking(data->pipe_fd[0]);
+    if (rc != pcmk_rc_ok) {
+        cl_log(LOG_INFO, "Could not set pipe input non-blocking: %s " CRM_XS " rc=%d",
+               pcmk_rc_str(rc), rc);
+    }
+    rc = sbd__set_nonblocking(data->pipe_fd[1]);
+    if (rc != pcmk_rc_ok) {
+        cl_log(LOG_INFO, "Could not set pipe output non-blocking: %s " CRM_XS " rc=%d",
+               pcmk_rc_str(rc), rc);
+    }
+
+    // Set SIGCHLD handler
+    data->sa.sa_handler = (sighandler_t) sigchld_handler;
+    data->sa.sa_flags = 0;
+    sigemptyset(&(data->sa.sa_mask));
+    if (sigaction(SIGCHLD, &(data->sa), &(data->old_sa)) < 0) {
+        cl_log(LOG_INFO, "Wait for child process completion failed: %s "
+               CRM_XS " source=sigaction", pcmk_rc_str(errno));
+    }
+
+    // Remember data for use in signal handler
+    last_sigchld_data = data;
+    return true;
+}
+
+static int
+sigchld_open(struct sigchld_data_s *data)
+{
+    CRM_CHECK(data != NULL, return -1);
+    return data->pipe_fd[0];
+}
+
+static void
+sigchld_close(int fd)
+{
+    // Pipe will be closed in sigchld_cleanup()
+    return;
+}
+
+static bool
+sigchld_received(int fd)
+{
+    char ch;
+
+    if (fd < 0) {
+        return false;
+    }
+
+    // Clear out the self-pipe
+    while (read(fd, &ch, 1) == 1) /*omit*/;
+    return true;
+}
+
+static void
+sigchld_cleanup(struct sigchld_data_s *data)
+{
+    // Restore the previous SIGCHLD handler
+    if (sigaction(SIGCHLD, &(data->old_sa), NULL) < 0) {
+        cl_log(LOG_WARNING, "Could not clean up after child process completion: %s",
+               pcmk_rc_str(errno));
+    }
+
+    close_pipe(data->pipe_fd);
+}
+
+static gboolean
+servant_read_output(int fd, struct servants_list_item * servant, bool is_stderr)
+{
+    char *data = NULL;
+    int rc = 0, len = 0;
+    char buf[500];
+    static const size_t buf_read_len = sizeof(buf) - 1;
+
+
+    if (fd < 0) {
+        cl_log(LOG_DEBUG, "No fd for %s for %s", servant->command, servant->devname);
+        return FALSE;
+    }
+
+    if (is_stderr && servant->stderr_data) {
+        len = strlen(servant->stderr_data);
+        data = servant->stderr_data;
+        cl_log(LOG_DEBUG, "Reading %s for %s stderr into offset %d",
+               servant->command, servant->devname, len);
+
+    } else if (is_stderr == FALSE && servant->stdout_data) {
+        len = strlen(servant->stdout_data);
+        data = servant->stdout_data;
+        cl_log(LOG_DEBUG, "Reading %s for %s stdout into offset %d",
+               servant->command, servant->devname, len);
+
+    } else {
+        cl_log(LOG_DEBUG, "Reading %s for %s %s into offset %d",
+               servant->command, servant->devname, is_stderr?"stderr":"stdout", len);
+    }
+
+    do {
+        rc = read(fd, buf, buf_read_len);
+        if (rc > 0) {
+            buf[rc] = 0;
+            cl_log(LOG_DEBUG, "Got %d chars: %.80s", rc, buf);
+            data = realloc(data, len + rc + 1);
+            if (data == NULL) {
+                abort();
+            }
+            len += sprintf(data + len, "%s", buf);
+
+        } else if (errno != EINTR) {
+            /* error or EOF
+             * Cleanup happens in pipe_done()
+             */
+            rc = FALSE;
+            break;
+        }
+
+    } while (rc == buf_read_len || rc < 0);
+
+    if (is_stderr) {
+        servant->stderr_data = data;
+    } else {
+        servant->stdout_data = data;
+    }
+
+    return rc;
+}
+
+static int
+dispatch_stdout(gpointer userdata)
+{
+    struct servants_list_item *servant = (struct servants_list_item *) userdata;
+
+    return servant_read_output(servant->stdout_fd, servant, FALSE);
+}
+
+static int
+dispatch_stderr(gpointer userdata)
+{
+    struct servants_list_item *servant = (struct servants_list_item *) userdata;
+
+    return servant_read_output(servant->stderr_fd, servant, TRUE);
+}
+
+static void
+pipe_out_done(gpointer user_data)
+{
+    struct servants_list_item *servant = (struct servants_list_item *) user_data;
+
+    cl_log(LOG_DEBUG, "%p", servant);
+
+    servant->stdout_gsource = NULL;
+    if (servant->stdout_fd > STDOUT_FILENO) {
+        close(servant->stdout_fd);
+    }
+    servant->stdout_fd = -1;
+}
+
+static void
+pipe_err_done(gpointer user_data)
+{
+    struct servants_list_item *servant = (struct servants_list_item *) user_data;
+
+    servant->stderr_gsource = NULL;
+    if (servant->stderr_fd > STDERR_FILENO) {
+        close(servant->stderr_fd);
+    }
+    servant->stderr_fd = -1;
+}
+
+static struct mainloop_fd_callbacks stdout_callbacks = {
+    .dispatch = dispatch_stdout,
+    .destroy = pipe_out_done,
+};
+
+static struct mainloop_fd_callbacks stderr_callbacks = {
+    .dispatch = dispatch_stderr,
+    .destroy = pipe_err_done,
+};
+
+static void
+finish_servant_output(struct servants_list_item *servant, bool is_stderr)
+{
+    mainloop_io_t **source;
+    int fd;
+
+    if (is_stderr) {
+        source = &(servant->stderr_gsource);
+        fd = servant->stderr_fd;
+    } else {
+        source = &(servant->stdout_gsource);
+        fd = servant->stdout_fd;
+    }
+
+    if (servant->synchronous || *source) {
+        cl_log(LOG_DEBUG, "Finish reading %s for %s [%d] %s",
+               servant->command, servant->devname, servant->pid,
+               (is_stderr? "stderr" : "stdout"));
+        servant_read_output(fd, servant, is_stderr);
+        if (servant->synchronous) {
+            close(fd);
+        } else {
+            mainloop_del_fd(*source);
+            *source = NULL;
+        }
+    }
+
+    if (is_stderr) {
+        if (servant->stderr_data) {
+            fprintf(stderr, "%s", servant->stderr_data);
+        }
+    } else if (servant->stdout_data) {
+        fprintf(stdout, "%s", servant->stdout_data);
+    }
+}
+
+// Log an operation's stdout and stderr
+static void
+log_servant_output(struct servants_list_item *servant)
+{
+    char *prefix = crm_strdup_printf("%s for %s [%d] output",
+                                     servant->command, servant->devname,
+                                     servant->pid);
+
+    /* The library caller has better context to know how important the output
+     * is, so log it at info and debug severity here. They can log it again at
+     * higher severity if appropriate.
+     */
+    crm_log_output(LOG_DEBUG, prefix, servant->stdout_data);
+    free(prefix);
+
+    prefix = crm_strdup_printf("%s for %s [%d] error output",
+                               servant->command, servant->devname,
+                               servant->pid);
+    crm_log_output(LOG_INFO, prefix, servant->stderr_data);
+    free(prefix);
+}
+
+/*!
+ * \internal
+ * \brief Process the completion of an asynchronous child process
+ *
+ * \param[in] p         Child process that completed
+ * \param[in] pid       Process ID of child
+ * \param[in] core      (unused)
+ * \param[in] signo     Signal that interrupted child, if any
+ * \param[in] exitcode  Exit status of child process
+ */
+static void
+async_servant_complete(mainloop_child_t *p, pid_t pid, int core, int signo,
+                      int exitcode)
+{
+    struct servants_list_item *servant = mainloop_child_userdata(p);
+
+    mainloop_clear_child_userdata(p);
+    CRM_CHECK(servant->pid == pid,
+              servant->rc = PCMK_EXEC_ERROR;
+              cl_log(LOG_INFO, "Bug in mainloop handling %s for %s [%d]",
+                     servant->command, servant->devname, servant->pid);
+              return);
+
+    /* Depending on the priority the mainloop gives the stdout and stderr
+     * file descriptors, this function could be called before everything has
+     * been read from them, so force a final read now.
+     */
+    finish_servant_output(servant, false);
+    finish_servant_output(servant, true);
+
+    if (signo == 0) {
+        cl_log(LOG_DEBUG, "%s for %s [%d] exited with status %d",
+               servant->command, servant->devname, servant->pid, exitcode);
+        servant->rc = exitcode;
+        log_servant_output(servant);
+
+    } else if (mainloop_child_timeout(p)) {
+        cl_log(LOG_WARNING, "%s for %s [%d] timed out after %dms",
+               servant->command, servant->devname, servant->pid, servant->timeout);
+        fprintf(stderr, "%s for %s [%d] timed out after %dms\n",
+                servant->command, servant->devname, servant->pid, servant->timeout);
+        servant->rc =  PCMK_EXEC_TIMEOUT;
+
+    } else {
+        cl_log(LOG_INFO, "%s for %s [%d] terminated with signal %d (%s)",
+               servant->command, servant->devname, servant->pid, signo,
+               strsignal(signo));
+        servant->rc = PCMK_EXEC_ERROR;
+    }
+
+    if(--active_servant_count == 0 && mainloop) {
+        g_main_loop_quit(mainloop);
+    }
+}
+
+/*!
+ * \internal
+ * \brief Wait for synchronous servant to complete, and set its result
+ *
+ * \param[in] servant    Servant to wait for
+ * \param[in] data  Child signal data
+ */
+static void
+wait_for_sync_result(struct servants_list_item *servant, struct sigchld_data_s *data)
+{
+    int status = 0;
+    int timeout = servant->timeout;
+    time_t start = time(NULL);
+    struct pollfd fds[3];
+    int wait_rc = 0;
+    const char *wait_reason = NULL;
+
+    fds[0].fd = servant->stdout_fd;
+    fds[0].events = POLLIN;
+    fds[0].revents = 0;
+
+    fds[1].fd = servant->stderr_fd;
+    fds[1].events = POLLIN;
+    fds[1].revents = 0;
+
+    fds[2].fd = sigchld_open(data);
+    fds[2].events = POLLIN;
+    fds[2].revents = 0;
+
+    cl_log(LOG_DEBUG, "Waiting for %s for %s [%d]",
+           servant->command, servant->devname, servant->pid);
+    do {
+        int poll_rc = poll(fds, 3, timeout);
+
+        wait_reason = NULL;
+
+        if (poll_rc > 0) {
+            if (fds[0].revents & POLLIN) {
+                servant_read_output(servant->stdout_fd, servant, FALSE);
+            }
+
+            if (fds[1].revents & POLLIN) {
+                servant_read_output(servant->stderr_fd, servant, TRUE);
+            }
+
+            if ((fds[2].revents & POLLIN) && sigchld_received(fds[2].fd)) {
+                wait_rc = waitpid(servant->pid, &status, WNOHANG);
+
+                if ((wait_rc > 0) || ((wait_rc < 0) && (errno == ECHILD))) {
+                    // Child process exited or doesn't exist
+                    break;
+
+                } else if (wait_rc < 0) {
+                    wait_reason = pcmk_rc_str(errno);
+                    cl_log(LOG_INFO, "Wait for completion of %s for %s [%d] failed: %s "
+                           CRM_XS " source=waitpid",
+                           servant->command, servant->devname, servant->pid, wait_reason);
+                    wait_rc = 0; // Act as if process is still running
+                }
+            }
+
+        } else if (poll_rc == 0) {
+            // Poll timed out with no descriptors ready
+            timeout = 0;
+            break;
+
+        } else if ((poll_rc < 0) && (errno != EINTR)) {
+            wait_reason = pcmk_rc_str(errno);
+            cl_log(LOG_INFO, "Wait for completion of %s for %s [%d] failed: %s "
+                   CRM_XS " source=poll",
+                   servant->command, servant->devname, servant->pid, wait_reason);
+            break;
+        }
+
+        timeout = servant->timeout - (time(NULL) - start) * 1000;
+
+    } while ((servant->timeout < 0 || timeout > 0));
+
+    cl_log(LOG_DEBUG, "Stopped waiting for %s for %s [%d]",
+           servant->command, servant->devname, servant->pid);
+    finish_servant_output(servant, false);
+    finish_servant_output(servant, true);
+    sigchld_close(fds[2].fd);
+
+    if (wait_rc <= 0) {
+
+        if ((servant->timeout > 0) && (timeout <= 0)) {
+            servant->rc = PCMK_EXEC_TIMEOUT;
+            cl_log(LOG_WARNING, "%s for %s [%d] timed out after %dms",
+                   servant->command, servant->devname, servant->pid, servant->timeout);
+            fprintf(stderr, "%s for %s [%d] timed out after %dms\n",
+                    servant->command, servant->devname, servant->pid, servant->timeout);
+
+        } else {
+            servant->rc = PCMK_EXEC_ERROR;
+        }
+
+        /* If only child hasn't been successfully waited for, yet.
+           This is to limit killing wrong target a bit more. */
+        if ((wait_rc == 0) && (waitpid(servant->pid, &status, WNOHANG) == 0)) {
+            if (kill(servant->pid, SIGKILL)) {
+                cl_log(LOG_WARNING, "Could not kill rogue child %s for %s [%d]: %s",
+                       servant->command, servant->devname, servant->pid, pcmk_rc_str(errno));
+            }
+            /* Safe to skip WNOHANG here as we sent non-ignorable signal. */
+            while ((waitpid(servant->pid, &status, 0) == (pid_t) -1)
+                   && (errno == EINTR)) {
+                /* keep waiting */;
+            }
+        }
+
+    } else if (WIFEXITED(status)) {
+        servant->rc = WEXITSTATUS(status);
+        cl_log(LOG_INFO, "%s for %s [%d] exited with status %d",
+               servant->command, servant->devname, servant->pid, servant->rc);
+
+    } else if (WIFSIGNALED(status)) {
+        int signo = WTERMSIG(status);
+
+        servant->rc = PCMK_EXEC_ERROR;
+        cl_log(LOG_INFO, "%s for %s [%d] terminated with signal %d (%s)",
+               servant->command, servant->devname, servant->pid, signo, strsignal(signo));
+
+#ifdef WCOREDUMP
+        if (WCOREDUMP(status)) {
+            cl_log(LOG_WARNING, "%s for %s [%d] dumped core",
+                   servant->command, servant->devname, servant->pid);
+        }
+#endif
+
+    } else {
+        // Shouldn't be possible to get here
+        servant->rc = PCMK_EXEC_ERROR;
+        cl_log(LOG_INFO, "Unable to wait for child to complete: %s for %s [%d]",
+               servant->command, servant->devname, servant->pid);
+    }
+}
+
+/*!
+ * \internal
+ * \brief Execute a servant
+ *
+ * \param[in] servant   Servant to execute
+ * \param[in] functionp Function to be called for the servant
+ *
+ * \return Standard Pacemaker return value
+ * \retval pcmk_rc_error  Synchronous servant failed
+ * \retval pcmk_rc_ok     Synchronous servant succeeded
+ *
+ */
+int
+assign_servant_with_pipes(struct servants_list_item *servant,
+                          functionp_t functionp, int mode, const void *argp)
+{
+    int stdout_fd[2];
+    int stderr_fd[2];
+    int rc;
+    struct stat st;
+    struct sigchld_data_s data;
+
+    if (pipe(stdout_fd) < 0) {
+        rc = errno;
+        cl_log(LOG_INFO, "Cannot execute %s for '%s': %s " CRM_XS " pipe(stdout) rc=%d",
+               servant->command, servant->devname, pcmk_strerror(rc), rc);
+        servant->rc = PCMK_EXEC_ERROR;
+        goto done;
+    }
+
+    if (pipe(stderr_fd) < 0) {
+        rc = errno;
+
+        close_pipe(stdout_fd);
+
+        cl_log(LOG_INFO, "Cannot execute %s for '%s': %s " CRM_XS " pipe(stderr) rc=%d",
+               servant->command, servant->devname, pcmk_strerror(rc), rc);
+        servant->rc = PCMK_EXEC_ERROR;
+        goto done;
+    }
+
+    if (servant->synchronous && !sigchld_setup(&data)) {
+        close_pipe(stdout_fd);
+        close_pipe(stderr_fd);
+        sigchld_cleanup(&data);
+        servant->rc = PCMK_EXEC_ERROR;
+        cl_log(LOG_INFO, "Could not manage signals for child process: %s for %s",
+               servant->command, servant->devname);
+        goto done;
+    }
+
+    servant->pid = fork();
+    switch (servant->pid) {
+        case -1:
+            rc = errno;
+            close_pipe(stdout_fd);
+            close_pipe(stderr_fd);
+
+            cl_log(LOG_INFO, "Cannot execute %s for '%s': %s " CRM_XS " fork rc=%d",
+                   servant->command, servant->devname, pcmk_strerror(rc), rc);
+            servant->rc = PCMK_EXEC_ERROR;
+            if (servant->synchronous) {
+                sigchld_cleanup(&data);
+            }
+            goto done;
+            break;
+
+        case 0:                /* Child */
+            close(stdout_fd[0]);
+            close(stderr_fd[0]);
+            if (STDOUT_FILENO != stdout_fd[1]) {
+                if (dup2(stdout_fd[1], STDOUT_FILENO) != STDOUT_FILENO) {
+                    cl_log(LOG_WARNING, "Can't redirect output from %s for '%s': %s "
+                           CRM_XS " errno=%d",
+                           servant->command, servant->devname, pcmk_rc_str(errno), errno);
+                }
+                close(stdout_fd[1]);
+            }
+            if (STDERR_FILENO != stderr_fd[1]) {
+                if (dup2(stderr_fd[1], STDERR_FILENO) != STDERR_FILENO) {
+                    cl_log(LOG_WARNING, "Can't redirect error output from %s for '%s': %s "
+                           CRM_XS " errno=%d",
+                           servant->command, servant->devname, pcmk_rc_str(errno), errno);
+                }
+                close(stderr_fd[1]);
+            }
+
+            rc = (*functionp)(servant->devname, mode, argp);
+
+            if (servant->synchronous) {
+                sigchld_cleanup(&data);
+            }
+
+            if (rc == -1) {
+                exit(1);
+
+            } else {
+                exit(0);
+            }
+    }
+
+    /* Only the parent reaches here */
+    close(stdout_fd[1]);
+    close(stderr_fd[1]);
+
+    servant->stdout_fd = stdout_fd[0];
+    rc = sbd__set_nonblocking(servant->stdout_fd);
+    if (rc != pcmk_rc_ok) {
+        cl_log(LOG_INFO, "Could not set %s for '%s' output non-blocking: %s "
+               CRM_XS " rc=%d",
+               servant->command, servant->devname, pcmk_rc_str(rc), rc);
+    }
+
+    servant->stderr_fd = stderr_fd[0];
+    rc = sbd__set_nonblocking(servant->stderr_fd);
+    if (rc != pcmk_rc_ok) {
+        cl_log(LOG_INFO, "Could not set %s for '%s' error output non-blocking: %s "
+               CRM_XS " rc=%d",
+               servant->command, servant->devname, pcmk_rc_str(rc), rc);
+    }
+
+    if (servant->synchronous) {
+        wait_for_sync_result(servant, &data);
+        sigchld_cleanup(&data);
+        goto done;
+    }
+
+    cl_log(LOG_DEBUG, "Waiting async for %s for '%s'[%d]",
+           servant->command, servant->devname, servant->pid);
+    mainloop_child_add_with_flags(servant->pid, servant->timeout,
+                                  servant->devname, servant, 0,
+                                  async_servant_complete);
+
+    servant->stdout_gsource = mainloop_add_fd(servant->devname,
+                                                 G_PRIORITY_LOW,
+                                                 servant->stdout_fd, servant,
+                                                 &stdout_callbacks);
+    servant->stderr_gsource = mainloop_add_fd(servant->devname,
+                                                 G_PRIORITY_LOW,
+                                                 servant->stderr_fd, servant,
+                                                 &stderr_callbacks);
+    active_servant_count++;
+
+done:
+    if (servant->synchronous) {
+        return (servant->rc == PCMK_EXEC_DONE)? pcmk_rc_ok : pcmk_rc_error;
+    }
+
+    return pcmk_rc_ok;
 }
 
 struct servants_list_item *lookup_servant_by_dev(const char *devname)
@@ -1014,7 +1674,7 @@ int main(int argc, char **argv, char **envp)
             }
         }
 
-	while ((c = getopt(argc, argv, "czC:DPRTWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:r:")) != -1) {
+	while ((c = getopt(argc, argv, "czC:DPRTWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:r:a")) != -1) {
 		int sanitized_num_optarg = 0;
 		/* Call it before checking optarg for NULL to make coverity happy */
 		const char *sanitized_optarg = sanitize_option_value(optarg);
@@ -1148,6 +1808,9 @@ int main(int argc, char **argv, char **envp)
 				free(timeout_action);
 			}
 			timeout_action = strdup(sanitized_optarg);
+			break;
+		case 'a':
+			servant_synchronous = 0;
 			break;
 		case 'h':
 			usage();
@@ -1303,7 +1966,7 @@ int main(int argc, char **argv, char **envp)
 		exit_status = init_devices(servants_leader);
 
         } else if (strcmp(argv[optind], "dump") == 0) {
-		exit_status = dump_headers(servants_leader);
+		exit_status = query_devices(servants_leader, argv[optind]);
 
         } else if (strcmp(argv[optind], "allocate") == 0) {
             exit_status = allocate_slots(argv[optind + 1], servants_leader);
