@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/reboot.h>
 #include <stdarg.h>
@@ -88,8 +89,17 @@ typedef int (*orig_io_cancel_f_type)(io_context_t ctx_id, struct iocb *iocb,
 static int is_init = 0;
 static FILE *log_fp = NULL;
 
-static char *sbd_device[3] = {NULL, NULL, NULL};
-static int sbd_device_fd[3] = {-1, -1, -1};
+#define SBD_MAX_DEVICES 3
+
+struct sbd_device {
+    char *path;
+    int fd;
+    void *mlock_addr;
+    size_t mlock_len;
+};
+
+static struct sbd_device sbd_devices[SBD_MAX_DEVICES];
+static int mlock_warned = 0;
 
 static FILE *sysrq_fp = NULL;
 static FILE *sysrq_trigger_fp = NULL;
@@ -163,6 +173,10 @@ init (void)
 
         is_init = 1;
 
+        for (i = 0; i < SBD_MAX_DEVICES; i++) {
+            sbd_devices[i].fd = -1;
+        }
+
         orig_open         = (orig_open_f_type)dlsym_fatal(RTLD_NEXT,"open");
         orig_ioctl        = (orig_ioctl_f_type)dlsym_fatal(RTLD_NEXT,"ioctl");
         orig_close        = (orig_close_f_type)dlsym_fatal(RTLD_NEXT,"close");
@@ -206,12 +220,12 @@ init (void)
 
         value = getenv("SBD_DEVICE");
         if ((value) && (str = str_orig = strdup(value))) {
-            for (i = 0; i < 3; i++, str = NULL) {
+            for (i = 0; i < SBD_MAX_DEVICES; i++, str = NULL) {
                 token = strtok(str, ";");
                 if (token == NULL) {
                     break;
                 }
-                sbd_device[i] = strdup(token);
+                sbd_devices[i].path = strdup(token);
             }
             free(str_orig);
         }
@@ -305,6 +319,62 @@ watchdog_disarm (void) {
     }
 }
 
+/* Device-images live in page-cache and may thus be swapped out,
+ * making the timing of the tests unpredictable. So as long as a
+ * process holds a device-image open we keep it mlocked. Only done
+ * for regular files coming in via SBD_DEVICE (device-mapper mode
+ * isn't covered - sbd opens the mapper-nodes rather than the
+ * image-files there). If mlock isn't permitted (RLIMIT_MEMLOCK)
+ * we carry on unlocked after a one-time warning.
+ */
+static void
+munlock_device(int devnum)
+{
+    if (sbd_devices[devnum].mlock_addr == NULL) {
+        return;
+    }
+    munlock(sbd_devices[devnum].mlock_addr, sbd_devices[devnum].mlock_len);
+    munmap(sbd_devices[devnum].mlock_addr, sbd_devices[devnum].mlock_len);
+    sbd_devices[devnum].mlock_addr = NULL;
+}
+
+static void
+mlock_device(int devnum, int fd)
+{
+    struct stat st;
+    void *addr;
+
+    if (fd < 0) {
+        return;
+    }
+    if (fstat(fd, &st) != 0) {
+        return;
+    }
+    if (!S_ISREG(st.st_mode) || (st.st_size == 0)) {
+        return;
+    }
+    addr = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED) {
+        return;
+    }
+    if (mlock(addr, st.st_size) != 0) {
+        if (!mlock_warned) {
+            mlock_warned = 1;
+            fprintf(stderr, "Failed mlocking %s (%s)"
+                    " - device-images may swap out\n",
+                    sbd_devices[devnum].path, strerror(errno));
+        }
+        munmap(addr, st.st_size);
+        return;
+    }
+    /* drop a mapping potentially still held for an older fd of
+     * the same device - the pages stay locked via the new mapping
+     */
+    munlock_device(devnum);
+    sbd_devices[devnum].mlock_addr = addr;
+    sbd_devices[devnum].mlock_len = st.st_size;
+}
+
 int
 open(const char *pathname, int flags, ...)
 {
@@ -315,9 +385,9 @@ open(const char *pathname, int flags, ...)
 
     init();
 
-    for (i=0; i < 3; i++) {
-        if (sbd_device[i]) {
-            if (strcmp(sbd_device[i], pathname) == 0) {
+    for (i=0; i < SBD_MAX_DEVICES; i++) {
+        if (sbd_devices[i].path) {
+            if (strcmp(sbd_devices[i].path, pathname) == 0) {
                 devnum = i;
                 flags &= ~O_DIRECT;
                 break;
@@ -341,9 +411,9 @@ open(const char *pathname, int flags, ...)
                         case 0:
                             free(watchdog_device);
                             watchdog_device = NULL;
-                            for (i = 0; i < 3; i++) {
-                                free(sbd_device[i]);
-                                sbd_device[i] = NULL;
+                            for (i = 0; i < SBD_MAX_DEVICES; i++) {
+                                free(sbd_devices[i].path);
+                                sbd_devices[i].path = NULL;
                             }
                             close(watchdog_pipe[1]);
                             if (fcntl(watchdog_pipe[0], F_SETFL, O_NONBLOCK) == -1) {
@@ -389,7 +459,16 @@ open(const char *pathname, int flags, ...)
     va_end (ap);
 
     if (devnum >= 0) {
-        sbd_device_fd[devnum] = fd;
+        sbd_devices[devnum].fd = fd;
+        mlock_device(devnum, fd);
+        if ((fd >= 0) && log_fp) {
+            /* logged once mlocking is done, so possible pulling of
+             * pages in from swap has finished by then - purely for
+             * diagnostics, telling who opened a device-image when
+             */
+            fprintf(log_fp, "device-image %s opened (ppid %d)\n",
+                    sbd_devices[devnum].path, getppid());
+        }
     } else if (is_wd_dev) {
         watchdog_device_fd = fd;
     }
@@ -437,13 +516,13 @@ ioctl(int fd, int request, ...)
 #endif
         ) {
         case BLKSSZGET:
-            for (i=0; i < 3; i++) {
-                if (sbd_device_fd[i] == fd) {
+            for (i=0; i < SBD_MAX_DEVICES; i++) {
+                if (sbd_devices[i].fd == fd) {
                     rv = 0;
                     *(va_arg(ap, int *)) = 512;
                     break;
                 }
-                if (i == 2) {
+                if (i == SBD_MAX_DEVICES - 1) {
                     rv = orig_ioctl(fd, request, va_arg(ap, int *));
                 }
             }
@@ -500,9 +579,10 @@ close(int fd)
     if (fd == watchdog_device_fd) {
         watchdog_device_fd = -1;
     } else {
-        for (i = 0; i < 3; i++) {
-            if (sbd_device_fd[i] == fd) {
-                sbd_device_fd[i] = -1;
+        for (i = 0; i < SBD_MAX_DEVICES; i++) {
+            if (sbd_devices[i].fd == fd) {
+                sbd_devices[i].fd = -1;
+                munlock_device(i);
                 break;
             }
         }
