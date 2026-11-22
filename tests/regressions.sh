@@ -205,15 +205,23 @@ _wait_in_log() {
 	# deadlines are based on monotonic time - wall-clock time may
 	# jump e.g. when ntpd steps the clock on a CI-machine
 	local timeout=$1
-	local up deadline
+	local up deadline checks c cs stamps
 	shift
 
 	read -r up _ < /proc/uptime
 	deadline=$(( ${up/./} + ${timeout} * 100 ))
 	while ! grep "$@" ${SBD_PRELOAD_LOG} >/dev/null 2>&1; do
+		# collect when the checks actually ran - under load the
+		# loop might not get scheduled when it should
 		read -r up _ < /proc/uptime
+		checks="${checks} ${up/./}"
 		if [[ ${up/./} -ge ${deadline} ]]; then
-			_log "didn't find '$*' in log within ${timeout}s:"
+			stamps=""
+			for c in ${checks}; do
+				cs=00$(( c - ${SBD_DATE_RELATIVE_CS} ))
+				stamps="${stamps}$(TZ=UTC date -d "@${cs::-2}.${cs: -2}" "${SBD_DATESTRING}")"
+			done
+			_log "didn't find '$*' in log within ${timeout}s - checks ran at:${stamps}"
 			cat ${SBD_PRELOAD_LOG}
 			sbd_daemon_cleanup
 			exit 1
