@@ -79,8 +79,10 @@ sbd_setup() {
 	if [[ "${SBD_USE_DM}" != "yes" ]]; then
 		SBD_DEVICE="${F[1]};${F[2]};${F[3]}"
 	fi
-	SBD_PIDFILE=$(mktemp /tmp/sbd.pidfile.XXXXXX)
-	SBD_PRELOAD_LOG=$(mktemp /tmp/sbd.logfile.XXXXXX)
+	# keep pid- and log-file in memory as well - writes to a busy
+	# disk-backed filesystem could be delayed
+	SBD_PIDFILE=$(mktemp ${SBD_IMGPATH}/sbd.pidfile.XXXXXX)
+	SBD_PRELOAD_LOG=$(mktemp ${SBD_IMGPATH}/sbd.logfile.XXXXXX)
 	sbd -d ${D[1]} create
 	WATCHDOG_TIMEOUT=$(LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${D[1]}" ${SBD_BINARY} dump |grep watchdog|cut -f2 -d:)
 	MSGWAIT_TIMEOUT=$(LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${D[1]}" ${SBD_BINARY} dump |grep msgwait|cut -f2 -d:)
