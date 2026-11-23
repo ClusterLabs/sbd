@@ -375,6 +375,25 @@ test_wipe_slots2() {
 	_in_log "reboot (reboot)"
 }
 
+test_wipe_majority() {
+	_log "Wipe disks until majority is lost test"
+	sbd_daemon_cleanup
+	sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} create
+	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
+	sbd_wipe_disk ${D[1]}
+	_log "first disk is wiped"
+	# losing a single disk out of three must leave the node alone
+	sleep $((${WATCHDOG_TIMEOUT} * 2))
+	_ok kill -0 "$(cat ${SBD_PIDFILE})"
+	_log "daemon is still alive"
+	sbd_wipe_disk ${D[2]}
+	_log "second disk is wiped - majority is lost"
+	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
+	_in_log "sysrq-trigger ('b')"
+	_in_log "reboot (reboot)"
+}
+
 test_message1() {
 	_log "Message test (reset)"
 	sbd_daemon_cleanup
@@ -410,6 +429,23 @@ test_message3() {
 	_wait_in_log 5 "sysrq-trigger ('c')"
 }
 
+test_message_disks() {
+	_log "Message test on each of three disks"
+	# a single creation upfront does - the leftover fencing-message
+	# of an iteration is wiped by the servants on first start
+	# (startmode always, the default)
+	sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} create
+	for N in 1 2 3; do
+		sbd_daemon_cleanup
+		_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -w /dev/null -n test-1 watch
+		_log "daemon is up"
+		sbd -d ${D[$N]} message test-1 reset
+		_log "message sent on disk ${N} - delivery time passed"
+		_wait_in_log 5 "sysrq-trigger ('b')"
+		_in_log "reboot (reboot)"
+	done
+}
+
 test_timeout_action1() {
 	_log "Timeout action test (off)"
 	sbd_daemon_cleanup
@@ -435,6 +471,24 @@ test_timeout_action2() {
 	_in_log "sysrq-trigger ('c')"
 }
 
+test_startmode() {
+	_log "Startmode test (clean vs. always)"
+	sbd_daemon_cleanup
+	sbd -d ${D[1]} create
+	_ok sbd -d ${D[1]} allocate test-1
+	_ok sbd -d ${D[1]} message test-1 reset
+	# with the fencing message left in the slot of the local node
+	# and startmode clean the daemon has to refuse to start
+	SBD_STARTMODE=clean _no sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	# with startmode always it comes up regardless, wipes the
+	# message and stays alive
+	SBD_STARTMODE=always _ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
+	sleep $((${WATCHDOG_TIMEOUT} * 2))
+	_ok kill -0 "$(cat ${SBD_PIDFILE})"
+	_log "daemon is still alive"
+}
+
 echo "SBD_BINARY = \"${SBD_BINARY}\""
 echo "SBD_PRELOAD = \"${SBD_PRELOAD}\""
 echo "SBD_USE_DM = \"${SBD_USE_DM}\""
@@ -448,7 +502,7 @@ sbd_setup
 echo "running sbd-tests with WATCHDOG_TIMEOUT=${WATCHDOG_TIMEOUT}s MSGWAIT_TIMEOUT=${MSGWAIT_TIMEOUT}s"
 
 if [[ "${SBD_PRELOAD}" != "" ]]; then
-	SBD_DAEMON_TESTS="watchdog stall_inquisitor wipe_slots1 wipe_slots2 message1 message2 message3 timeout_action1 timeout_action2"
+	SBD_DAEMON_TESTS="watchdog stall_inquisitor wipe_slots1 wipe_slots2 wipe_majority message1 message2 message3 message_disks timeout_action1 timeout_action2 startmode"
 fi
 
 for T in 101 102 $(seq 9) ${SBD_DAEMON_TESTS}; do
