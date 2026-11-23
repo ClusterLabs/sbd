@@ -489,10 +489,31 @@ test_startmode() {
 	_log "daemon is still alive"
 }
 
+test_failtest() {
+	_log "Deliberately failing test"
+	# the stamps are relative to the start of the test-run rather
+	# than to the start of the daemon - the wait makes it easy to
+	# tell apart in the output on failure
+	sleep 10
+	sbd_daemon_cleanup
+	sbd -d ${D[1]} create
+	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
+	sbd -d ${D[1]} message test-1 reset
+	_log "message sent - delivery time passed"
+	_wait_in_log 5 "this is never in the log"
+}
+
+if [[ "${SBD_PRELOAD}" != "" ]]; then
+	SBD_DAEMON_TESTS="watchdog stall_inquisitor wipe_slots1 wipe_slots2 wipe_majority message1 message2 message3 message_disks timeout_action1 timeout_action2 startmode"
+fi
+: ${SBD_RUN_TESTS:="101 102 $(seq -s ' ' 9) ${SBD_DAEMON_TESTS}"}
+
 echo "SBD_BINARY = \"${SBD_BINARY}\""
 echo "SBD_PRELOAD = \"${SBD_PRELOAD}\""
 echo "SBD_USE_DM = \"${SBD_USE_DM}\""
 echo "SBD_TRANSLATE_AIO = \"${SBD_TRANSLATE_AIO}\""
+echo "SBD_RUN_TESTS = \"${SBD_RUN_TESTS}\""
 echo "SBD_DATESTRING = \"${SBD_DATESTRING}\""
 echo "SBD_DATE_RELATIVE_NS = \"${SBD_DATE_RELATIVE_NS}\""
 echo "SBD_DATE_RELATIVE_CS = \"${SBD_DATE_RELATIVE_CS}\""
@@ -501,11 +522,9 @@ sbd_setup
 
 echo "running sbd-tests with WATCHDOG_TIMEOUT=${WATCHDOG_TIMEOUT}s MSGWAIT_TIMEOUT=${MSGWAIT_TIMEOUT}s"
 
-if [[ "${SBD_PRELOAD}" != "" ]]; then
-	SBD_DAEMON_TESTS="watchdog stall_inquisitor wipe_slots1 wipe_slots2 wipe_majority message1 message2 message3 message_disks timeout_action1 timeout_action2 startmode"
-fi
-
-for T in 101 102 $(seq 9) ${SBD_DAEMON_TESTS}; do
+sep='----------------------------------------------------------------'
+for T in ${SBD_RUN_TESTS}; do
+	_log "------ test_${T} ${sep:13+${#T}}"
 	if ! test_$T ; then
 		# actually tests should exit on failure
 		# just for the case one should come back
