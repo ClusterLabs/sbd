@@ -35,9 +35,15 @@
 # SBD_DATESTRING as date-format-string incl. the leading '+'
 # (just '+' for no timestamps) and are relative to the epoch in
 # SBD_DATE_RELATIVE_NS - by default the start of the run, 0 for
-# absolute (UTC) times
+# absolute (UTC) times; the monotonic time actually used is
+# derived from it via /proc/uptime into SBD_DATE_RELATIVE_CS so
+# that the timestamps don't jump when the wall-clock does -
+# SBD_DATE_RELATIVE_CS can be passed directly as well to override
+# the derivation (centiseconds since boot)
+read -r up _ < /proc/uptime
 : ${SBD_DATESTRING:="+%M:%S.%N "}
 : ${SBD_DATE_RELATIVE_NS:=$(date +%s%N)}
+: ${SBD_DATE_RELATIVE_CS:=$(( (${SBD_DATE_RELATIVE_NS} - $(date +%s%N)) / 10000000 + ${up/./} ))}
 
 sbd() {
 	LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${SBD_DEVICE}" SBD_PRELOAD_LOG=${SBD_PRELOAD_LOG} SBD_DATE_RELATIVE_CS=${SBD_DATE_RELATIVE_CS} SBD_WATCHDOG_DEV=/dev/watchdog setsid ${SBD_BINARY} -p ${SBD_PIDFILE} "$@"
@@ -154,10 +160,11 @@ sbd_daemon_cleanup() {
 }
 
 _log() {
-	local ns
+	local cs up
 
-	ns=000000000$(( $(date +%s%N) - ${SBD_DATE_RELATIVE_NS} ))
-	TZ=UTC date -d "@${ns::-9}.${ns: -9}" "${SBD_DATESTRING}$*"
+	read -r up _ < /proc/uptime
+	cs=00$(( ${up/./} - ${SBD_DATE_RELATIVE_CS} ))
+	TZ=UTC date -d "@${cs::-2}.${cs: -2}" "${SBD_DATESTRING}$*"
 }
 
 _ok() {
@@ -195,12 +202,17 @@ _wait_in_log() {
 	# wait up to $1 seconds for $2... to show up in the testbed-log -
 	# the servants poll the device-images only about once a second, so
 	# a fixed interval before checking is a race under load
+	# deadlines are based on monotonic time - wall-clock time may
+	# jump e.g. when ntpd steps the clock on a CI-machine
 	local timeout=$1
-	local deadline=$(( $(date +%s) + ${timeout} ))
+	local up deadline
 	shift
 
+	read -r up _ < /proc/uptime
+	deadline=$(( ${up/./} + ${timeout} * 100 ))
 	while ! grep "$@" ${SBD_PRELOAD_LOG} >/dev/null 2>&1; do
-		if [[ $(date +%s) -ge ${deadline} ]]; then
+		read -r up _ < /proc/uptime
+		if [[ ${up/./} -ge ${deadline} ]]; then
 			_log "didn't find '$*' in log within ${timeout}s:"
 			cat ${SBD_PRELOAD_LOG}
 			sbd_daemon_cleanup
@@ -388,6 +400,7 @@ echo "SBD_USE_DM = \"${SBD_USE_DM}\""
 echo "SBD_TRANSLATE_AIO = \"${SBD_TRANSLATE_AIO}\""
 echo "SBD_DATESTRING = \"${SBD_DATESTRING}\""
 echo "SBD_DATE_RELATIVE_NS = \"${SBD_DATE_RELATIVE_NS}\""
+echo "SBD_DATE_RELATIVE_CS = \"${SBD_DATE_RELATIVE_CS}\""
 
 sbd_setup
 
