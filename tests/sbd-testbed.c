@@ -88,6 +88,7 @@ typedef int (*orig_io_cancel_f_type)(io_context_t ctx_id, struct iocb *iocb,
 
 static int is_init = 0;
 static FILE *log_fp = NULL;
+static int date_relative_cs = -1;
 
 #define SBD_MAX_DEVICES 3
 
@@ -143,7 +144,7 @@ static void
 watchdog_shutdown(int nsig)
 {
     if (watchdog_timer_id > 0) {
-        fprintf(log_fp, "exiting with watchdog-timer armed\n");
+        log_write("exiting with watchdog-timer armed\n");
     }
 }
 #endif
@@ -211,6 +212,13 @@ init (void)
         }
         if (log_fp == NULL) {
             fprintf(stderr, "couldn't open log-file\n");
+        } else {
+            /* line-buffered so that entries are in the file
+             * immediately - processes dying on a signal wouldn't
+             * flush a full buffer otherwise and long-running ones
+             * might not write anything for a long time
+             */
+            setvbuf(log_fp, NULL, _IOLBF, 0);
         }
 
         value = getenv("SBD_WATCHDOG_DEV");
@@ -234,7 +242,65 @@ init (void)
         if ((value) && !strcmp(value, "yes")) {
             translate_aio = 1;
         }
+
+        /* timestamp the log-entries relative to the very same
+         * monotonic reference the regression-test uses for its
+         * output - not done when the reference isn't handed down
+         */
+        value = getenv("SBD_DATE_RELATIVE_CS");
+        if ((value) && (strlen(value) > 0)) {
+            date_relative_cs = atoi(value);
+        }
     }
+}
+
+/* no configurable format like SBD_DATESTRING in the regression-
+ * script here - printf-format-strings are lacking the high-res
+ * stuff, so the stamp is rendered by hand from the centiseconds
+ */
+static void
+log_stamp(void)
+{
+    char buf[64];
+    long long s = 0, frac = 0, cs;
+    int fd, len;
+
+    if (date_relative_cs < 0) {
+        return;
+    }
+    fd = open("/proc/uptime", O_RDONLY);
+    if (fd < 0) {
+        return;
+    }
+    len = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (len <= 0) {
+        return;
+    }
+    buf[len] = '\0';
+    if (sscanf(buf, "%lld.%2lld", &s, &frac) < 1) {
+        return;
+    }
+    cs = s * 100 + frac - date_relative_cs;
+    if (cs < 0) {
+        cs = 0;
+    }
+    fprintf(log_fp, "[%lld:%02lld.%02lld] ",
+            cs / 6000, (cs / 100) % 60, cs % 100);
+}
+
+static void
+log_write(const char *format, ...)
+{
+    va_list ap;
+
+    if (log_fp == NULL) {
+        return;
+    }
+    log_stamp();
+    va_start(ap, format);
+    vfprintf(log_fp, format, ap);
+    va_end(ap);
 }
 
 // ***** end - handling of watchdog & block-devices ****
@@ -242,7 +308,7 @@ init (void)
 static gboolean
 watchdog_timeout_notify(gpointer data)
 {
-    fprintf(log_fp, "watchdog fired after %ds - killing process group\n",
+    log_write("watchdog fired after %ds - killing process group\n",
             watchdog_timeout);
     fclose(log_fp);
     log_fp = NULL;
@@ -273,7 +339,7 @@ watchdog_dispatch_callback (gint fd,
         } while ((len == -1) && (errno == EINTR));
         if (len <= 0) {
             if (len == -1) {
-                fprintf(log_fp, "Couldn't read from watchdog-pipe\n");
+                log_write("Couldn't read from watchdog-pipe\n");
             }
             buf[i] = '\0';
             break;
@@ -289,7 +355,7 @@ watchdog_dispatch_callback (gint fd,
     } else if (strcmp(buf, "disarm") == 0) {
         // timer is stopped already
     } else {
-        fprintf(log_fp, "unknown watchdog command\n");
+        log_write("unknown watchdog command\n");
     }
     return TRUE;
 }
@@ -301,7 +367,7 @@ watchdog_arm (void) {
     if ((watchdog_timeout > 0) && (watchdog_pipe[1] >= 0)) {
         sprintf(buf, "trigger %ds\n", watchdog_timeout);
         if (write(watchdog_pipe[1], buf, strlen(buf)) != strlen(buf)) {
-            fprintf(log_fp, "Failed tickling watchdog via pipe\n");
+            log_write("Failed tickling watchdog via pipe\n");
         }
     }
 }
@@ -314,7 +380,7 @@ watchdog_disarm (void) {
     if (watchdog_pipe[1] >= 0) {
         sprintf(buf, "disarm\n");
         if (write(watchdog_pipe[1], buf, strlen(buf)) != strlen(buf)) {
-            fprintf(log_fp, "Failed disarming watchdog via pipe\n");
+            log_write("Failed disarming watchdog via pipe\n");
         }
     }
 }
@@ -399,14 +465,14 @@ open(const char *pathname, int flags, ...)
             is_wd_dev = 1;
             if (watchdog_pipe[1] == -1) {
                 if (pipe(watchdog_pipe) == -1) {
-                    fprintf(log_fp, "Creating pipe for watchdog failed\n");
+                    log_write("Creating pipe for watchdog failed\n");
                 } else {
                     int i;
 
                     watchdog_pid = fork();
                     switch (watchdog_pid) {
                         case -1:
-                            fprintf(log_fp, "Forking watchdog-child failed\n");
+                            log_write("Forking watchdog-child failed\n");
                             break;
                         case 0:
                             free(watchdog_device);
@@ -418,7 +484,7 @@ open(const char *pathname, int flags, ...)
                             close(watchdog_pipe[1]);
                             if (fcntl(watchdog_pipe[0], F_SETFL, O_NONBLOCK) == -1) {
                                 // don't block on read for timer to be handled
-                                fprintf(log_fp,
+                                log_write(
                                         "Failed setting watchdog-pipe-read to non-blocking");
                             }
                             mainloop = g_main_loop_new(NULL, FALSE);
@@ -429,7 +495,7 @@ open(const char *pathname, int flags, ...)
                                                     watchdog_dispatch_callback,
                                                     NULL);
                             if (watchdog_source_id == 0) {
-                                fprintf(log_fp, "Failed creating source for watchdog-pipe\n");
+                                log_write("Failed creating source for watchdog-pipe\n");
                                 exit(1);
                             }
                             g_main_loop_run(mainloop);
@@ -438,7 +504,7 @@ open(const char *pathname, int flags, ...)
                         default:
                             close(watchdog_pipe[0]);
                             if (fcntl(watchdog_pipe[1], F_SETFL, O_NONBLOCK) == -1) {
-                                fprintf(log_fp,
+                                log_write(
                                         "Failed setting watchdog-pipe-write to non-blocking");
                             }
                     }
@@ -466,7 +532,7 @@ open(const char *pathname, int flags, ...)
              * pages in from swap has finished by then - purely for
              * diagnostics, telling who opened a device-image when
              */
-            fprintf(log_fp, "device-image %s opened (ppid %d)\n",
+            log_write("device-image %s opened (ppid %d)\n",
                     sbd_devices[devnum].path, getppid());
         }
     } else if (is_wd_dev) {
@@ -553,7 +619,7 @@ ioctl(int fd, int request, ...)
             rv = orig_ioctl(fd, request, va_arg(ap, struct watchdog_info *));
             break;
         default:
-            fprintf(log_fp, "ioctl using unknown request = "
+            log_write("ioctl using unknown request = "
 #ifdef __GLIBC__
                 "0x%08lx",
                 request
@@ -651,7 +717,7 @@ fprintf(FILE *stream, const char *format, ...)
 
         rv = vsnprintf(buf, sizeof(buf), format, ap);
         if (rv >= 1) {
-            fprintf(log_fp, "sysrq-trigger ('%c') - %s\n", buf[0],
+            log_write("sysrq-trigger ('%c') - %s\n", buf[0],
                     (buf[0] == 'c')?"killing process group":"don't kill but wait for reboot-call");
             if (buf[0] == 'c') {
                 fclose(log_fp);
@@ -683,7 +749,7 @@ fscanf(FILE *stream, const char *format, ...)
 int
 reboot (int __howto)
 {
-    fprintf(log_fp, "reboot (%s) - exiting inquisitor process\n",
+    log_write("reboot (%s) - exiting inquisitor process\n",
             (__howto == RB_POWER_OFF)?"poweroff":"reboot");
     fclose(log_fp);
     log_fp = NULL;
