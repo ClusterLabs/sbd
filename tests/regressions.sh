@@ -89,7 +89,7 @@ sbd_setup() {
 	# disk-backed filesystem could be delayed
 	SBD_PIDFILE=$(mktemp ${SBD_IMGPATH}/sbd.pidfile.XXXXXX)
 	SBD_PRELOAD_LOG=$(mktemp ${SBD_IMGPATH}/sbd.logfile.XXXXXX)
-	sbd -d ${D[1]} create
+	sbd -d ${D[1]} -2 0 create
 	WATCHDOG_TIMEOUT=$(LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${D[1]}" ${SBD_BINARY} dump |grep watchdog|cut -f2 -d:)
 	MSGWAIT_TIMEOUT=$(LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${D[1]}" ${SBD_BINARY} dump |grep msgwait|cut -f2 -d:)
 }
@@ -147,15 +147,33 @@ sbd_dev_resume() {
 }
 
 sbd_daemon_cleanup() {
+	local pid i
+
 	if [[ "${SBD_PRELOAD_LOG}" != "" ]]; then
+		# truncate rather than remove - processes still holding
+		# it open would keep writing to a removed file
 		echo > ${SBD_PRELOAD_LOG}
 	fi
-	if [[ "${SBD_PIDFILE}" != "" ]]; then
+	# without a pidfile there is nothing to clean up - and handing
+	# a missing file to the commands would only make them bark
+	if [[ -e ${SBD_PIDFILE} ]]; then
 		pkill -TERM --pidfile ${SBD_PIDFILE} 2>/dev/null
-		sleep 5
-		pkill -KILL --pidfile ${SBD_PIDFILE} 2>/dev/null
-		pkill -KILL --parent "$(cat ${SBD_PIDFILE} 2>/dev/null)" 2>/dev/null
-		echo > ${SBD_PIDFILE}
+		# wait for the daemon to die rather than sleeping
+		# blindly - usually it is gone in a fraction of a second
+		pid=""
+		read -r pid < ${SBD_PIDFILE}
+		for i in $(seq 50); do
+			kill -0 "${pid}" 2>/dev/null || break
+			sleep 0.1
+		done
+		# take down the whole process-group as a backstop - the
+		# servants may have been reparented once the daemon died
+		# and would trigger their timeout-action if left alone
+		kill -KILL -- -"${pid}" 2>/dev/null
+		# remove rather than truncate - on a leftover empty
+		# pidfile the next daemon waits a second before
+		# locking it
+		rm -f ${SBD_PIDFILE}
 	fi
 }
 
@@ -232,7 +250,7 @@ _wait_in_log() {
 
 test_1() {
 	_log "Creating three devices"
-	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} create
+	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -2 0 create
 	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} dump
 }
 
@@ -284,12 +302,12 @@ test_6() {
 
 test_101() {
 	_log "Creating one device"
-	_ok sbd -d ${D[1]} create
+	_ok sbd -d ${D[1]} -2 0 create
 }
 
 test_102() {
 	_log "Creating two devices"
-	_ok sbd -d ${D[1]} -d ${D[2]} create
+	_ok sbd -d ${D[1]} -d ${D[2]} -2 0 create
 }
 
 test_7() {
