@@ -104,6 +104,20 @@ SBD_TIMEOUT_ACTION=flush,reboot
 # If that is the case sbd will stay in that slice while it will
 # be moved to root-slice otherwise.
 #
+# With cgroup-v2 behavior is very much different.
+# With CONFIG_RT_GROUP_SCHED enabled and cpu-controller enabled
+# there currently is no way to configure RT-budget in any slice
+# but the root-slice. Otherway round if there is RT-budget used
+# in any but the root-slice enabling the cpu-controller is
+# inhibited.
+# Thus - unless strictly disabled by setting 'no' - with cgroup-v2
+# and CONFIG_RT_GROUP_SCHED enabled sbd is always moved
+# to the root-slice regardless if the cpu-controller is at the
+# moment enabled or not.
+# Reason is that subsequent services might enable the cpu-controller
+# or fail doing so if sbd was already using RT-budget in e.g. the
+# system-slice.
+#
 SBD_MOVE_TO_ROOT_CGROUP=auto
 
 ## Type: yesno
