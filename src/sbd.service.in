@@ -23,6 +23,5 @@ ExecStop=@bindir@/kill -TERM $MAINPID
 Restart=on-abort
 
 [Install]
-RequiredBy=corosync.service
 RequiredBy=pacemaker.service
 RequiredBy=dlm.service
