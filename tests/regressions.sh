@@ -35,12 +35,18 @@
 # SBD_DATESTRING as date-format-string incl. the leading '+'
 # (just '+' for no timestamps) and are relative to the epoch in
 # SBD_DATE_RELATIVE_NS - by default the start of the run, 0 for
-# absolute (UTC) times
+# absolute (UTC) times; the monotonic time actually used is
+# derived from it via /proc/uptime into SBD_DATE_RELATIVE_CS so
+# that the timestamps don't jump when the wall-clock does -
+# SBD_DATE_RELATIVE_CS can be passed directly as well to override
+# the derivation (centiseconds since boot)
+read -r up _ < /proc/uptime
 : ${SBD_DATESTRING:="+%M:%S.%N "}
 : ${SBD_DATE_RELATIVE_NS:=$(date +%s%N)}
+: ${SBD_DATE_RELATIVE_CS:=$(( (${SBD_DATE_RELATIVE_NS} - $(date +%s%N)) / 10000000 + ${up/./} ))}
 
 sbd() {
-	LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${SBD_DEVICE}" SBD_PRELOAD_LOG=${SBD_PRELOAD_LOG} SBD_WATCHDOG_DEV=/dev/watchdog setsid ${SBD_BINARY} -p ${SBD_PIDFILE} "$@"
+	LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${SBD_DEVICE}" SBD_PRELOAD_LOG=${SBD_PRELOAD_LOG} SBD_DATE_RELATIVE_CS=${SBD_DATE_RELATIVE_CS} SBD_WATCHDOG_DEV=/dev/watchdog setsid ${SBD_BINARY} -p ${SBD_PIDFILE} "$@"
 }
 
 sbd_wipe_disk() {
@@ -79,9 +85,11 @@ sbd_setup() {
 	if [[ "${SBD_USE_DM}" != "yes" ]]; then
 		SBD_DEVICE="${F[1]};${F[2]};${F[3]}"
 	fi
-	SBD_PIDFILE=$(mktemp /tmp/sbd.pidfile.XXXXXX)
-	SBD_PRELOAD_LOG=$(mktemp /tmp/sbd.logfile.XXXXXX)
-	sbd -d ${D[1]} create
+	# keep pid- and log-file in memory as well - writes to a busy
+	# disk-backed filesystem could be delayed
+	SBD_PIDFILE=$(mktemp ${SBD_IMGPATH}/sbd.pidfile.XXXXXX)
+	SBD_PRELOAD_LOG=$(mktemp ${SBD_IMGPATH}/sbd.logfile.XXXXXX)
+	sbd -d ${D[1]} -2 0 create
 	WATCHDOG_TIMEOUT=$(LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${D[1]}" ${SBD_BINARY} dump |grep watchdog|cut -f2 -d:)
 	MSGWAIT_TIMEOUT=$(LD_PRELOAD=${SBD_PRELOAD} SBD_DEVICE="${D[1]}" ${SBD_BINARY} dump |grep msgwait|cut -f2 -d:)
 }
@@ -139,23 +147,42 @@ sbd_dev_resume() {
 }
 
 sbd_daemon_cleanup() {
+	local pid i
+
 	if [[ "${SBD_PRELOAD_LOG}" != "" ]]; then
+		# truncate rather than remove - processes still holding
+		# it open would keep writing to a removed file
 		echo > ${SBD_PRELOAD_LOG}
 	fi
-	if [[ "${SBD_PIDFILE}" != "" ]]; then
+	# without a pidfile there is nothing to clean up - and handing
+	# a missing file to the commands would only make them bark
+	if [[ -e ${SBD_PIDFILE} ]]; then
 		pkill -TERM --pidfile ${SBD_PIDFILE} 2>/dev/null
-		sleep 5
-		pkill -KILL --pidfile ${SBD_PIDFILE} 2>/dev/null
-		pkill -KILL --parent "$(cat ${SBD_PIDFILE} 2>/dev/null)" 2>/dev/null
-		echo > ${SBD_PIDFILE}
+		# wait for the daemon to die rather than sleeping
+		# blindly - usually it is gone in a fraction of a second
+		pid=""
+		read -r pid < ${SBD_PIDFILE}
+		for i in $(seq 50); do
+			kill -0 "${pid}" 2>/dev/null || break
+			sleep 0.1
+		done
+		# take down the whole process-group as a backstop - the
+		# servants may have been reparented once the daemon died
+		# and would trigger their timeout-action if left alone
+		kill -KILL -- -"${pid}" 2>/dev/null
+		# remove rather than truncate - on a leftover empty
+		# pidfile the next daemon waits a second before
+		# locking it
+		rm -f ${SBD_PIDFILE}
 	fi
 }
 
 _log() {
-	local ns
+	local cs up
 
-	ns=000000000$(( $(date +%s%N) - ${SBD_DATE_RELATIVE_NS} ))
-	TZ=UTC date -d "@${ns::-9}.${ns: -9}" "${SBD_DATESTRING}$*"
+	read -r up _ < /proc/uptime
+	cs=00$(( ${up/./} - ${SBD_DATE_RELATIVE_CS} ))
+	TZ=UTC date -d "@${cs::-2}.${cs: -2}" "${SBD_DATESTRING}$*"
 }
 
 _ok() {
@@ -193,13 +220,26 @@ _wait_in_log() {
 	# wait up to $1 seconds for $2... to show up in the testbed-log -
 	# the servants poll the device-images only about once a second, so
 	# a fixed interval before checking is a race under load
+	# deadlines are based on monotonic time - wall-clock time may
+	# jump e.g. when ntpd steps the clock on a CI-machine
 	local timeout=$1
-	local deadline=$(( $(date +%s) + ${timeout} ))
+	local up deadline checks c cs stamps
 	shift
 
+	read -r up _ < /proc/uptime
+	deadline=$(( ${up/./} + ${timeout} * 100 ))
 	while ! grep "$@" ${SBD_PRELOAD_LOG} >/dev/null 2>&1; do
-		if [[ $(date +%s) -ge ${deadline} ]]; then
-			_log "didn't find '$*' in log within ${timeout}s:"
+		# collect when the checks actually ran - under load the
+		# loop might not get scheduled when it should
+		read -r up _ < /proc/uptime
+		checks="${checks} ${up/./}"
+		if [[ ${up/./} -ge ${deadline} ]]; then
+			stamps=""
+			for c in ${checks}; do
+				cs=00$(( c - ${SBD_DATE_RELATIVE_CS} ))
+				stamps="${stamps}$(TZ=UTC date -d "@${cs::-2}.${cs: -2}" "${SBD_DATESTRING}")"
+			done
+			_log "didn't find '$*' in log within ${timeout}s - checks ran at:${stamps}"
 			cat ${SBD_PRELOAD_LOG}
 			sbd_daemon_cleanup
 			exit 1
@@ -210,7 +250,7 @@ _wait_in_log() {
 
 test_1() {
 	_log "Creating three devices"
-	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} create
+	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -2 0 create
 	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} dump
 }
 
@@ -262,12 +302,12 @@ test_6() {
 
 test_101() {
 	_log "Creating one device"
-	_ok sbd -d ${D[1]} create
+	_ok sbd -d ${D[1]} -2 0 create
 }
 
 test_102() {
 	_log "Creating two devices"
-	_ok sbd -d ${D[1]} -d ${D[2]} create
+	_ok sbd -d ${D[1]} -d ${D[2]} -2 0 create
 }
 
 test_7() {
@@ -303,6 +343,7 @@ test_stall_inquisitor() {
 	# 'sbd watch' only returns successfully once the servants are up,
 	# have completed a first cycle and the watchdog is armed
 	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -n test-1 watch
+	_log "daemon is up"
 	_ok kill -0 "$(cat ${SBD_PIDFILE})"
 	kill -STOP "$(cat ${SBD_PIDFILE})"
 	sleep $((${WATCHDOG_TIMEOUT} * 2))
@@ -314,7 +355,9 @@ test_wipe_slots1() {
 	_log "Wipe slots test (with watchdog)"
 	sbd_daemon_cleanup
 	_ok sbd -d ${D[1]} -n test-1 watch
+	_log "daemon is up"
 	sbd_wipe_disk ${D[1]}
+	_log "disk is wiped"
 	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "watchdog fired"
 }
@@ -324,7 +367,28 @@ test_wipe_slots2() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
 	sbd_wipe_disk ${D[1]}
+	_log "disk is wiped"
+	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
+	_in_log "sysrq-trigger ('b')"
+	_in_log "reboot (reboot)"
+}
+
+test_wipe_majority() {
+	_log "Wipe disks until majority is lost test"
+	sbd_daemon_cleanup
+	sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} create
+	_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
+	sbd_wipe_disk ${D[1]}
+	_log "first disk is wiped"
+	# losing a single disk out of three must leave the node alone
+	sleep $((${WATCHDOG_TIMEOUT} * 2))
+	_ok kill -0 "$(cat ${SBD_PIDFILE})"
+	_log "daemon is still alive"
+	sbd_wipe_disk ${D[2]}
+	_log "second disk is wiped - majority is lost"
 	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('b')"
 	_in_log "reboot (reboot)"
@@ -335,7 +399,9 @@ test_message1() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
 	sbd -d ${D[1]} message test-1 reset
+	_log "message sent - delivery time passed"
 	_wait_in_log 5 "sysrq-trigger ('b')"
 	_in_log "reboot (reboot)"
 }
@@ -345,7 +411,9 @@ test_message2() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
 	sbd -d ${D[1]} message test-1 off
+	_log "message sent - delivery time passed"
 	_wait_in_log 5 "sysrq-trigger ('o')"
 	_in_log "reboot (poweroff)"
 }
@@ -355,8 +423,27 @@ test_message3() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
 	sbd -d ${D[1]} message test-1 crashdump
+	_log "message sent - delivery time passed"
 	_wait_in_log 5 "sysrq-trigger ('c')"
+}
+
+test_message_disks() {
+	_log "Message test on each of three disks"
+	# a single creation upfront does - the leftover fencing-message
+	# of an iteration is wiped by the servants on first start
+	# (startmode always, the default)
+	sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} create
+	for N in 1 2 3; do
+		sbd_daemon_cleanup
+		_ok sbd -d ${D[1]} -d ${D[2]} -d ${D[3]} -w /dev/null -n test-1 watch
+		_log "daemon is up"
+		sbd -d ${D[$N]} message test-1 reset
+		_log "message sent on disk ${N} - delivery time passed"
+		_wait_in_log 5 "sysrq-trigger ('b')"
+		_in_log "reboot (reboot)"
+	done
 }
 
 test_timeout_action1() {
@@ -364,7 +451,9 @@ test_timeout_action1() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	SBD_TIMEOUT_ACTION=off _ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
 	sbd_wipe_disk ${D[1]}
+	_log "disk is wiped"
 	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('o')"
 	_in_log "reboot (poweroff)"
@@ -375,27 +464,67 @@ test_timeout_action2() {
 	sbd_daemon_cleanup
 	sbd -d ${D[1]} create
 	SBD_TIMEOUT_ACTION=crashdump _ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
 	sbd_wipe_disk ${D[1]}
+	_log "disk is wiped"
 	sleep $((${MSGWAIT_TIMEOUT} + ${WATCHDOG_TIMEOUT} * 2))
 	_in_log "sysrq-trigger ('c')"
 }
+
+test_startmode() {
+	_log "Startmode test (clean vs. always)"
+	sbd_daemon_cleanup
+	sbd -d ${D[1]} create
+	_ok sbd -d ${D[1]} allocate test-1
+	_ok sbd -d ${D[1]} message test-1 reset
+	# with the fencing message left in the slot of the local node
+	# and startmode clean the daemon has to refuse to start
+	SBD_STARTMODE=clean _no sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	# with startmode always it comes up regardless, wipes the
+	# message and stays alive
+	SBD_STARTMODE=always _ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
+	sleep $((${WATCHDOG_TIMEOUT} * 2))
+	_ok kill -0 "$(cat ${SBD_PIDFILE})"
+	_log "daemon is still alive"
+}
+
+test_failtest() {
+	_log "Deliberately failing test"
+	# the stamps are relative to the start of the test-run rather
+	# than to the start of the daemon - the wait makes it easy to
+	# tell apart in the output on failure
+	sleep 10
+	sbd_daemon_cleanup
+	sbd -d ${D[1]} create
+	_ok sbd -d ${D[1]} -w /dev/null -n test-1 watch
+	_log "daemon is up"
+	sbd -d ${D[1]} message test-1 reset
+	_log "message sent - delivery time passed"
+	_wait_in_log 5 "this is never in the log"
+}
+
+if [[ "${SBD_PRELOAD}" != "" ]]; then
+	SBD_DAEMON_TESTS="watchdog stall_inquisitor wipe_slots1 wipe_slots2 wipe_majority message1 message2 message3 message_disks timeout_action1 timeout_action2 startmode"
+fi
+: ${SBD_RUN_TESTS:="101 102 $(seq -s ' ' 9) ${SBD_DAEMON_TESTS}"}
 
 echo "SBD_BINARY = \"${SBD_BINARY}\""
 echo "SBD_PRELOAD = \"${SBD_PRELOAD}\""
 echo "SBD_USE_DM = \"${SBD_USE_DM}\""
 echo "SBD_TRANSLATE_AIO = \"${SBD_TRANSLATE_AIO}\""
+echo "SBD_RUN_TESTS = \"${SBD_RUN_TESTS}\""
 echo "SBD_DATESTRING = \"${SBD_DATESTRING}\""
 echo "SBD_DATE_RELATIVE_NS = \"${SBD_DATE_RELATIVE_NS}\""
+echo "SBD_DATE_RELATIVE_CS = \"${SBD_DATE_RELATIVE_CS}\""
 
 sbd_setup
 
 echo "running sbd-tests with WATCHDOG_TIMEOUT=${WATCHDOG_TIMEOUT}s MSGWAIT_TIMEOUT=${MSGWAIT_TIMEOUT}s"
 
-if [[ "${SBD_PRELOAD}" != "" ]]; then
-	SBD_DAEMON_TESTS="watchdog stall_inquisitor wipe_slots1 wipe_slots2 message1 message2 message3 timeout_action1 timeout_action2"
-fi
-
-for T in 101 102 $(seq 9) ${SBD_DAEMON_TESTS}; do
+sep='----------------------------------------------------------------'
+for T in ${SBD_RUN_TESTS}; do
+	_log "------ test_${T} ${sep:13+${#T}}"
 	if ! test_$T ; then
 		# actually tests should exit on failure
 		# just for the case one should come back
